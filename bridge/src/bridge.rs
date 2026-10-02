@@ -695,14 +695,18 @@ impl Bridge {
     /// without it refuses the unknown field with a 400 — then each file is
     /// attached to the channel card and the message names it, which is the
     /// same bytes in the same card, only linked by text.
-    pub fn say(&self, c: &Chan, text: &str, files: &[(String, String)]) -> Result<Value, Failed> {
+    ///
+    /// `reply_to` threads the message under the one it answers. It is only a
+    /// display hint: a server without threading, or one that refuses that seq,
+    /// gets the message unthreaded rather than not at all.
+    pub fn say(&self, c: &Chan, text: &str, files: &[(String, String)], reply_to: Option<u64>) -> Result<Value, Failed> {
         let client = self.client()?;
         let path = in_doc(&format!("/api/cards/{}/say", c.card), &c.doc);
         if files.is_empty() {
-            return client.post(&path, &json!({ "text": text }));
+            return post_say(client, &path, json!({ "text": text }), reply_to);
         }
         let native: Vec<Value> = files.iter().map(|(n, d)| json!({ "name": n, "data_base64": d })).collect();
-        match client.post(&path, &json!({ "text": text, "files": native })) {
+        match post_say(client, &path, json!({ "text": text, "files": native }), reply_to) {
             Ok(mut r) => {
                 if r.get("files").is_none() {
                     r["files"] = json!(files.iter().map(|(n, _)| json!({ "name": n })).collect::<Vec<_>>());
@@ -710,12 +714,12 @@ impl Bridge {
                 r["native"] = json!(true);
                 Ok(r)
             }
-            Err(Failed { status: Some(400), message }) if message.contains("files") => self.say_attached(client, c, text, files),
+            Err(Failed { status: Some(400), message }) if message.contains("files") => self.say_attached(client, c, text, files, reply_to),
             Err(e) => Err(e),
         }
     }
 
-    fn say_attached(&self, client: &Client, c: &Chan, text: &str, files: &[(String, String)]) -> Result<Value, Failed> {
+    fn say_attached(&self, client: &Client, c: &Chan, text: &str, files: &[(String, String)], reply_to: Option<u64>) -> Result<Value, Failed> {
         let mut text = text.trim_end().to_string();
         let mut attached = Vec::new();
         for (name, b64) in files {
@@ -728,7 +732,7 @@ impl Bridge {
             text.push_str(&format!("\n\n📎 **{name}** ({}) — attachment #{index} on this card", human(bytes)));
             attached.push(json!({ "index": index, "name": name, "bytes": bytes }));
         }
-        let mut r = client.post(&in_doc(&format!("/api/cards/{}/say", c.card), &c.doc), &json!({ "text": text.trim_start() }))?;
+        let mut r = post_say(client, &in_doc(&format!("/api/cards/{}/say", c.card), &c.doc), json!({ "text": text.trim_start() }), reply_to)?;
         r["files"] = json!(attached);
         r["native"] = json!(false);
         Ok(r)
@@ -749,6 +753,24 @@ impl Bridge {
                 Err(_) => return Vec::new(),
             }
         }
+    }
+}
+
+/// `say`, threaded under `reply_to` when given. A 400 that names `reply_to`
+/// (a server without threading, or a seq it will not thread under) is retried
+/// once without it: the message matters, the thread is presentation.
+fn post_say(client: &Client, path: &str, mut body: Value, reply_to: Option<u64>) -> Result<Value, Failed> {
+    let Some(seq) = reply_to else { return client.post(path, &body) };
+    body["reply_to"] = json!(seq);
+    match client.post(path, &body) {
+        Err(Failed { status: Some(400), message }) if message.contains("reply_to") => {
+            eprintln!("trellisbridge: say on {path}: not threaded under #{seq} ({message})");
+            if let Some(o) = body.as_object_mut() {
+                o.remove("reply_to");
+            }
+            client.post(path, &body)
+        }
+        r => r,
     }
 }
 

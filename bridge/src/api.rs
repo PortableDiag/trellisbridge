@@ -244,11 +244,20 @@ fn say(bridge: &Bridge, body: &str) -> (u16, String) {
     // An unknown field is refused, not ignored: a typo answered 200 is a
     // message the agent thinks it sent.
     if let Some(obj) = v.as_object() {
-        if let Some(k) = obj.keys().find(|k| !matches!(k.as_str(), "card" | "text" | "files" | "document")) {
-            return (400, error(&format!("unknown field `{k}` — say takes {{card, text, files?, document?}}")));
+        if let Some(k) = obj.keys().find(|k| !matches!(k.as_str(), "card" | "text" | "files" | "document" | "reply_to")) {
+            return (400, error(&format!("unknown field `{k}` — say takes {{card, text, files?, document?, reply_to?}}")));
         }
     }
     let Some(card) = v["card"].as_u64() else { return (400, error("`card` (a number) is required")) };
+    // The message this one answers (trellis-web 0.88.0, desktop 0.215.0): the
+    // seq of a numbered message already in the channel.
+    let reply_to = match &v["reply_to"] {
+        Value::Null => None,
+        r => match r.as_u64().filter(|s| *s > 0) {
+            Some(s) => Some(s),
+            None => return (400, error("`reply_to` is the seq of a numbered message (a number above 0)")),
+        },
+    };
     let text = v["text"].as_str().unwrap_or("");
     let mut files = Vec::new();
     for f in v["files"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
@@ -264,10 +273,11 @@ fn say(bridge: &Bridge, body: &str) -> (u16, String) {
     if !bridge.owns(&chan) {
         return (403, error(&format!("#{card} is not a channel this agent answers in")));
     }
-    match bridge.say(&chan, text, &files) {
+    match bridge.say(&chan, text, &files, reply_to) {
         Ok(r) => {
             let files = if r["files"].is_null() { json!([]) } else { r["files"].clone() };
-            (200, json!({ "card": card, "seq": r["seq"], "files": files, "native": r["native"] }).to_string())
+            let reply_to = if r["reply_to"].is_null() { Value::Null } else { r["reply_to"].clone() };
+            (200, json!({ "card": card, "seq": r["seq"], "files": files, "native": r["native"], "reply_to": reply_to }).to_string())
         }
         // No answer from Trellis: retryable, and nothing was written.
         Err(e) if e.status.is_none() => (503, error(&e.message)),
@@ -433,8 +443,13 @@ mod tests {
         let b = for_test(vec![9]);
         let r = route(&b, "POST", "/api/say", "", r#"{"card":10,"text":"hi"}"#, true);
         assert_eq!(r.0, 403, "{}", r.1);
-        let r = route(&b, "POST", "/api/say", "", r#"{"card":9,"text":"hi","reply_to":1}"#, true);
+        let r = route(&b, "POST", "/api/say", "", r#"{"card":9,"text":"hi","reply":1}"#, true);
         assert_eq!(r.0, 400, "{}", r.1);
+        for bad in [r#"0"#, r#""3""#, r#"-1"#] {
+            let r = route(&b, "POST", "/api/say", "", &format!(r#"{{"card":9,"text":"hi","reply_to":{bad}}}"#), true);
+            assert_eq!(r.0, 400, "reply_to {bad}: {}", r.1);
+            assert!(r.1.contains("reply_to"), "{}", r.1);
+        }
         let r = route(&b, "POST", "/api/say", "", r#"{"card":9,"text":"  "}"#, true);
         assert_eq!(r.0, 400, "{}", r.1);
     }

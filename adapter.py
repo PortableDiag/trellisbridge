@@ -6,7 +6,7 @@ holds only the bridge key and does three things:
 
 - ``GET  /api/events?after=<id>&wait=25`` — the bridge's long-poll, oldest first
 - ``POST /api/events/{id}/ack``           — once Hermes has accepted the message
-- ``POST /api/say {card, text}``          — a reply, posted as the agent
+- ``POST /api/say {card, text, reply_to?}`` — a reply, posted as the agent, threaded under the message it answers
 
 ``chat_id`` is the channel card id. ``user_id`` is the Trellis speaker name,
 which is a label the poster chose, not an authentication — the allowlist
@@ -372,43 +372,49 @@ class TrellisAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=None)
         if not self._http:
             return SendResult(success=False, error="not connected to TrellisBridge")
-        return await _say(self._http, self._base, chat_id, content)
+        return await _say(self._http, self._base, chat_id, content, reply_to=self._reply_seq(reply_to))
 
-    async def _send_files(self, chat_id: str, paths: List[str], caption: Optional[str]) -> SendResult:
+    def _reply_seq(self, reply_to: Optional[str]) -> Optional[int]:
+        """The channel seq of the message being answered (Hermes passes the
+        event id it handed us); None when it is not one we know."""
+        return self._seq_of.get(str(reply_to)) if reply_to else None
+
+    async def _send_files(self, chat_id: str, paths: List[str], caption: Optional[str],
+                          reply_to: Optional[str] = None) -> SendResult:
         if not self._http:
             return SendResult(success=False, error="not connected to TrellisBridge")
         try:
             files = [_file_entry(p) for p in paths]
         except OSError as e:
             return SendResult(success=False, error=f"cannot read file: {e}")
-        return await _say(self._http, self._base, chat_id, caption or "", files)
+        return await _say(self._http, self._base, chat_id, caption or "", files, reply_to=self._reply_seq(reply_to))
 
     async def send_document(self, chat_id: str, file_path: str, caption: Optional[str] = None,
                             file_name: Optional[str] = None, reply_to: Optional[str] = None,
                             metadata: Optional[Dict[str, Any]] = None, **kwargs) -> SendResult:
-        return await self._send_files(chat_id, [file_path], caption)
+        return await self._send_files(chat_id, [file_path], caption, reply_to)
 
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None,
                               reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
                               **kwargs) -> SendResult:
-        return await self._send_files(chat_id, [image_path], caption)
+        return await self._send_files(chat_id, [image_path], caption, reply_to)
 
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
                          **kwargs) -> SendResult:
-        return await self._send_files(chat_id, [audio_path], caption)
+        return await self._send_files(chat_id, [audio_path], caption, reply_to)
 
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
                          **kwargs) -> SendResult:
-        return await self._send_files(chat_id, [video_path], caption)
+        return await self._send_files(chat_id, [video_path], caption, reply_to)
 
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """A URL image is fetched and attached, so the card keeps the bytes
         rather than a link that can rot (the reference's own rule)."""
         if image_url.startswith("file://"):
-            return await self._send_files(chat_id, [image_url[7:]], caption)
+            return await self._send_files(chat_id, [image_url[7:]], caption, reply_to)
         try:
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as c:
                 r = await c.get(image_url)
@@ -421,13 +427,14 @@ class TrellisAdapter(BasePlatformAdapter):
                 f.write(r.content)
         except Exception as e:
             return SendResult(success=False, error=f"could not fetch {image_url}: {e}")
-        return await self._send_files(chat_id, [path], caption)
+        return await self._send_files(chat_id, [path], caption, reply_to)
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {"name": f"Trellis channel #{chat_id}", "type": "dm"}
 
 
-async def _say(client, base: str, chat_id: str, content: str, files: Optional[List[Dict[str, str]]] = None) -> SendResult:
+async def _say(client, base: str, chat_id: str, content: str, files: Optional[List[Dict[str, str]]] = None,
+               reply_to: Optional[int] = None) -> SendResult:
     try:
         doc, card = _split_chat(chat_id)
     except (TypeError, ValueError):
@@ -437,6 +444,8 @@ async def _say(client, base: str, chat_id: str, content: str, files: Optional[Li
         body["document"] = doc
     if files:
         body["files"] = files
+    if reply_to:
+        body["reply_to"] = reply_to
     try:
         resp = await client.post(f"{base}/api/say", json=body, timeout=180.0)
     except Exception as e:
