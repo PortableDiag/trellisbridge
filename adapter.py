@@ -470,9 +470,13 @@ def _env_enablement() -> dict | None:
 
 
 def register(ctx) -> None:
-    from . import research_tools as _research, tools as _tools
+    from . import cli as _cli, research_tools as _research, tools as _tools
     _tools.register(ctx)
     _research.register(ctx)
+    # `hermes trellis setup` installs the bridge and connects it (see cli.py).
+    if hasattr(ctx, "register_cli_command"):
+        ctx.register_cli_command(name="trellis", help="Set up and check the Trellis connection (TrellisBridge)",
+                                 setup_fn=_cli.register_cli, handler_fn=_cli.dispatch)
     ctx.register_platform(
         name="trellis", label="Trellis", adapter_factory=lambda cfg: TrellisAdapter(cfg),
         check_fn=check_requirements, validate_config=validate_config, is_connected=is_connected,

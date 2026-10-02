@@ -108,7 +108,7 @@ def _fold(lines: list) -> str:
 def canonical_sha256(skill_md: str) -> str:
     """LANAgent's hash, as trellis-web computes it: SHA-256 of the compact JSON
     `[name, description with line breaks folded to spaces, body trimmed]`."""
-    text = skill_md.lstrip("﻿")
+    text = skill_md.lstrip("\ufeff")
     if not text.startswith("---"):
         raise ValueError("no front matter")
     end = text.find("\n---", 3)

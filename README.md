@@ -1,62 +1,51 @@
 # TrellisBridge
 
 Connect a [Hermes Agent](https://github.com/NousResearch/hermes-agent) to
-[Trellis](https://trellis-cards.com). Your agent then answers in Trellis channels,
-acts on @mentions, assignments and sign-off requests anywhere in your documents,
-and can use the whole Trellis API, the way it already works on Telegram.
-
-- **The bridge** (`trellisbridge`, Rust) holds the agent's Trellis key and listens to
-  Trellis's agent event stream. It falls back to long-polling, and needs no public
-  port. It hands events to Hermes and serves the Trellis API as MCP tools on
-  `127.0.0.1`.
-- **The plugin** (`hermes-plugin/trellis`) makes Trellis a chat platform inside
-  Hermes. It holds only the bridge's own key, **never the Trellis key**, so a prompt
-  injection cannot walk off with it.
-
-One bridge per Hermes agent; several agents on one machine each get their own.
+[Trellis](https://trellis-cards.com). Your agent answers in Trellis channels and acts
+on @mentions, assignments and sign-off requests, the way it already works on
+Telegram.
 
 ## Install
 
-1. In Trellis, signed in, open **Keys** and mint a key **bound to the agent's
-   name** (the name it will post as), scoped to the document or basket it
-   should reach.
-2. Download `trellisbridge-<version>.tar.gz` from
-   [Releases](../../releases/latest) onto the machine that runs Hermes, then:
+```sh
+hermes plugins install PortableDiag/trellisbridge --enable
+hermes trellis setup
+```
 
-   ```sh
-   tar xzf trellisbridge-*.tar.gz && cd trellisbridge-*/
-   ./install.sh --key-file /path/to/trellis.key
-   ```
+`setup` asks for the agent's Trellis key. Get one in Trellis: **Keys → New key**, bound
+to the agent's name (the name it will post as). That's it: in Trellis, claim a channel
+for the agent or @mention it, and it answers.
 
-   It installs the bridge as a systemd user service (`trellisbridge@<name>`), puts
-   the plugin in `$HERMES_HOME/plugins/trellis`, points Hermes's MCP config at the
-   bridge, and restarts the gateway. Static binaries are included for x86_64 and
-   aarch64 Linux; anything else builds from the included source (needs
-   [Rust](https://rustup.rs)). For Hermes in Docker, see `install.sh --help`.
+`hermes trellis status` shows whether it is connected. Run `hermes trellis setup`
+again to upgrade.
 
-3. Claim a channel for the agent in Trellis, or @mention it. It answers.
+## What setup does
 
-Full details: [`bundle/INSTALL.md`](bundle/INSTALL.md).
+- **Downloads the bridge** for your CPU (x86_64 or aarch64 Linux) and checks it against
+  the release's `SHA256SUMS`. On anything else it builds it from the source in
+  `bridge/`, which needs [Rust](https://rustup.rs).
+- **Runs it as a user service**, `trellisbridge@<name>`. The bridge is the only thing
+  that holds the Trellis key. Hermes gets a key for the bridge, never the Trellis key,
+  so a prompt injection cannot walk off with it.
+- **Points Hermes at it:** the Trellis chat platform and the Trellis API as tools.
+  Then it restarts the gateway.
+
+The bridge follows Trellis's event stream, so messages arrive within about a second.
+It needs no open port.
 
 ## Who the agent listens to
 
-Only the **key owner** is obeyed: a person's message from your own account, typed in
-a signed-in browser or your linked Telegram. Another agent's or another person's
-message is conversation, not an order: the agent will talk with them, but will not
-delete, send or change things on their say-so. A loop guard stops agents talking
-in circles. Trellis records who sent each message from the credential, so no
-message can claim to be you.
+Only you, the key's owner: your own messages, typed in Trellis or sent from your
+linked Telegram. Other agents and people are conversation, not orders. The agent will
+talk with them, but will not delete, send or change things on their say-so. Trellis
+records who sent each message from the credential, so no message can claim to be you.
 
-## Build from source
+## More
 
-```sh
-cargo build --release
-scripts/bundle.sh        # dist/trellisbridge-<version>.tar.gz
-```
-
-The bridge is a small, blocking Rust program with no async runtime.
+Options (another Trellis server, Hermes in Docker, several agents on one machine, a
+manual install without the plugin manager) are in [INSTALL.md](INSTALL.md).
 
 ## License
 
-MIT. The scripts in `hermes-plugin/trellis/vendor/` are from Hermes Agent's optional
-skills (MIT, Nous Research); see the `LICENSE` there.
+MIT. The scripts in `vendor/` are from Hermes Agent's optional skills (MIT, Nous
+Research); see `vendor/LICENSE`.

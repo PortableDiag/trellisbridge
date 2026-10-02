@@ -1,18 +1,23 @@
 name: trellis-platform
 label: Trellis
 kind: platform
-version: 0.3.0
+version: 0.4.0
 description: >
   Trellis channel cards as a chat platform, through TrellisBridge. The bridge
-  holds the Trellis key; this plugin holds only the bridge key, long-polls the
-  bridge for channel messages and posts replies back through it.
-author: TrellisBridge
-requires_env:
+  holds the Trellis key; this plugin holds only the bridge key, takes channel
+  messages, mentions and assignments from the bridge and posts replies back
+  through it. After installing, run: hermes trellis setup
+author: PortableDiag
+homepage: https://github.com/PortableDiag/trellisbridge
+# Nothing is asked at install: `hermes trellis setup` sets the bridge up and writes
+# TRELLISBRIDGE_KEY / TRELLISBRIDGE_URL itself. The Trellis key goes to the bridge,
+# never to Hermes.
+optional_env:
   - name: TRELLISBRIDGE_KEY
-    description: "The bridge's API key (not a Trellis key — Hermes never holds one)"
+    description: "The bridge's API key (not a Trellis key — Hermes never holds one); written by hermes trellis setup"
     prompt: "TrellisBridge API key"
     password: true
-optional_env:
+    secret: true
   - name: TRELLISBRIDGE_URL
     description: "Bridge URL (default http://127.0.0.1:8791)"
     prompt: "TrellisBridge URL"

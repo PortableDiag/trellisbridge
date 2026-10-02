@@ -35,13 +35,16 @@ install.sh [options]
                          mcp_servers.trellis at the bridge)
   --no-systemd           do not install a systemd user unit; print the run command
   --no-restart           do not restart the Hermes gateway
+  --bin PATH             use this trellisbridge binary (hermes trellis setup passes it)
+  --no-plugin            the plugin is already installed (hermes plugins install):
+                         leave it where it is
 EOF
 }
 
 die() { echo "install: $*" >&2; exit 1; }
 say() { echo "  $*"; }
 
-KEY_FILE= KEY_ENV= AGENT= NAME= PORT= URL= AVATAR= DESC= MCP=1 SYSTEMD=1 RESTART=1
+KEY_FILE= KEY_ENV= AGENT= NAME= PORT= URL= AVATAR= DESC= MCP=1 SYSTEMD=1 RESTART=1 GIVEN_BIN= PLUGIN=1
 HERMES_HOME_DIR=${HERMES_HOME:-$HOME/.hermes}
 HERMES_CMD=hermes
 while [ $# -gt 0 ]; do
@@ -59,6 +62,8 @@ while [ $# -gt 0 ]; do
     --no-mcp) MCP=0 ;;
     --no-systemd) SYSTEMD=0 ;;
     --no-restart) RESTART=0 ;;
+    --bin) GIVEN_BIN=$2; shift ;;
+    --no-plugin) PLUGIN=0 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "unknown option $1" ;;
   esac
@@ -76,12 +81,14 @@ CONF_DIR=$CONF_ROOT/$NAME
 CONFIG=$CONF_DIR/config.toml
 umask 077
 
-echo "TrellisBridge $(cat "$HERE/VERSION") → Hermes at $HERMES_HOME_DIR (bridge instance \"$NAME\")"
+echo "TrellisBridge $(cat "$HERE/VERSION" 2>/dev/null || echo) → Hermes at $HERMES_HOME_DIR (bridge instance \"$NAME\")"
 
 # 1. The binary: the bundled one for this machine, else built from the bundled source.
 ARCH=$(uname -m)
-BIN=$HERE/bin/trellisbridge-$ARCH-linux
-if [ "$(uname -s)" != Linux ] || [ ! -x "$BIN" ]; then
+BIN=${GIVEN_BIN:-$HERE/bin/trellisbridge-$ARCH-linux}
+if [ -n "$GIVEN_BIN" ]; then
+  [ -x "$GIVEN_BIN" ] || die "--bin $GIVEN_BIN is not an executable"
+elif [ "$(uname -s)" != Linux ] || [ ! -x "$BIN" ]; then
   command -v cargo >/dev/null || die "no prebuilt binary for $(uname -s)/$ARCH and no cargo to build one (https://rustup.rs)"
   say "building from source for $(uname -s)/$ARCH…"
   cargo build --release --quiet --manifest-path "$HERE/source/Cargo.toml" --target-dir "$HERE/source/target"
@@ -157,12 +164,16 @@ else
 fi
 
 # 4. Hermes: the plugin, its env, the MCP server.
-PLUG=$HERMES_HOME_DIR/plugins/trellis
-mkdir -p "$HERMES_HOME_DIR/plugins"
-rm -rf "$PLUG.new" && cp -r "$HERE/hermes-plugin/trellis" "$PLUG.new"
-find "$PLUG.new" -name __pycache__ -prune -exec rm -rf {} +
-rm -rf "$PLUG" && mv "$PLUG.new" "$PLUG"
-say "plugin    $PLUG ($(sed -n 's/^version: //p' "$PLUG/plugin.yaml"))"
+if [ "$PLUGIN" = 1 ]; then
+  PLUG=$HERMES_HOME_DIR/plugins/trellis
+  mkdir -p "$HERMES_HOME_DIR/plugins"
+  rm -rf "$PLUG.new" && cp -r "$HERE/hermes-plugin/trellis" "$PLUG.new"
+  find "$PLUG.new" -name __pycache__ -prune -exec rm -rf {} +
+  rm -rf "$PLUG" && mv "$PLUG.new" "$PLUG"
+  say "plugin    $PLUG ($(sed -n 's/^version: //p' "$PLUG/plugin.yaml"))"
+else
+  say "plugin    installed by Hermes (hermes plugins install)"
+fi
 
 upsert_env() {  # NAME VALUE — replace or append one line, keep the file's mode
   touch "$ENV_FILE"
