@@ -89,6 +89,16 @@ def _safe_body(text: str) -> str:
     return _TERMINATOR.sub("***", text)
 
 
+# In a group channel the operator must @-address the agent, so a command
+# arrives as "@Nexus /approve session". Hermes only runs text that starts with
+# "/", so the leading mentions go before a slash command.
+_COMMAND_AFTER_MENTIONS = re.compile(r"^(?:@[\w.-]+[\s,:]*)+(?=/[A-Za-z])")
+
+
+def _command_text(text: str) -> str:
+    return _COMMAND_AFTER_MENTIONS.sub("", text, count=1)
+
+
 def _url(extra: Dict[str, Any]) -> str:
     return _extra_or_secret(extra, "url", "TRELLISBRIDGE_URL", DEFAULT_URL).rstrip("/")
 
@@ -270,6 +280,8 @@ class TrellisAdapter(BasePlatformAdapter):
                 kind = getattr(MessageType, "DOCUMENT", MessageType.TEXT)
             # Slash commands (/model, /yolo, /restart, /approve…) are the
             # operator's alone. Anyone else's "/…" stays plain text.
+            if event.get("provenance") == "operator":
+                text = _command_text(text)
             await self.handle_message(MessageEvent(
                 text=text, message_type=kind, source=source, message_id=eid,
                 raw_message=event, timestamp=ts, media_urls=paths, media_types=types,
