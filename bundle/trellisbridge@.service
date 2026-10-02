@@ -1,0 +1,17 @@
+[Unit]
+Description=TrellisBridge (%i) — holds this agent's Trellis key; Hermes reaches Trellis through it
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# One instance per Hermes: config, key and cursors in @CONF_ROOT@/%i/.
+ExecStart=@BIN@ --config @CONF_ROOT@/%i/config.toml serve
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

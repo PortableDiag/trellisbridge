@@ -1,0 +1,31 @@
+name: trellis-platform
+label: Trellis
+kind: platform
+version: 0.3.0
+description: >
+  Trellis channel cards as a chat platform, through TrellisBridge. The bridge
+  holds the Trellis key; this plugin holds only the bridge key, long-polls the
+  bridge for channel messages and posts replies back through it.
+author: TrellisBridge
+requires_env:
+  - name: TRELLISBRIDGE_KEY
+    description: "The bridge's API key (not a Trellis key — Hermes never holds one)"
+    prompt: "TrellisBridge API key"
+    password: true
+optional_env:
+  - name: TRELLISBRIDGE_URL
+    description: "Bridge URL (default http://127.0.0.1:8791)"
+    prompt: "TrellisBridge URL"
+    password: false
+  - name: TRELLIS_ALLOWED_USERS
+    description: "Comma-separated Trellis speaker names allowed to talk to the agent"
+    prompt: "Allowed speakers (comma-separated)"
+    password: false
+  - name: TRELLIS_ALLOW_ALL_USERS
+    description: "Allow any speaker (dev only — disables the allowlist)"
+    prompt: "Allow all speakers? (true/false)"
+    password: false
+  - name: TRELLIS_HOME_CHANNEL
+    description: "Channel card id for cron / notification delivery"
+    prompt: "Home channel card id (or empty)"
+    password: false

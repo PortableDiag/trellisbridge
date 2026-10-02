@@ -1,0 +1,23 @@
+[package]
+name = "trellisbridge"
+version = "0.7.0"
+edition = "2021"
+description = "Connects a Hermes agent to Trellis: channels, @mentions and the whole Trellis API, with the Trellis key held outside the agent"
+license = "MIT"
+
+[[bin]]
+name = "trellisbridge"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# A blocking HTTP server with no async runtime behind it. Same choice trellis
+# and keystore-manager made: this serves a handful of local agents, not a fleet.
+tiny_http = "0.12"
+directories = "5"
+# Blocking HTTP client for Trellis and keystore-manager; the house choice
+# (ProjectForge, Factory, CloudAPI), and no async runtime behind it.
+ureq = { version = "2", features = ["json"] }
+base64 = "0.22"
