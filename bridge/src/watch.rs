@@ -441,12 +441,18 @@ pub fn said_in(changes: &[Value], agent: &str) -> Vec<u64> {
 
 /// A channel message that calls `agent` by name: the server addressed it to
 /// the agent (`to`), and the agent is the first one it @-mentions. "@trellis
-/// tell @Nexus …" is for trellis; "@Nexus you there?" is for Nexus.
+/// tell @Nexus …" is for trellis; "@Nexus you there?" is for Nexus. A sender's
+/// explicit list (`say {to}`, `to_source: "list"`, desktop 0.217.0) is the
+/// addressing itself, so there the text's @mentions are prose and `to` alone
+/// decides.
 pub fn called_by_name(m: &Value, agent: &str) -> bool {
     if m["from"].as_str().is_some_and(|f| f.eq_ignore_ascii_case(agent)) {
         return false;
     }
     let to = m["to"].as_array().is_some_and(|t| t.iter().any(|n| n.as_str().is_some_and(|n| n.eq_ignore_ascii_case(agent))));
+    if m["to_source"].as_str() == Some("list") {
+        return to;
+    }
     to && first_mention(m["text"].as_str().unwrap_or("")).is_some_and(|n| n.eq_ignore_ascii_case(agent))
 }
 
@@ -560,6 +566,11 @@ mod tests {
         assert!(!called_by_name(&m("@Nexus you there?", json!([])), "Nexus"), "the server did not address it");
         assert!(!called_by_name(&m("mail a@Nexus.dev", json!(["Nexus"])), "Nexus"));
         assert!(!called_by_name(&json!({"from": "Nexus", "text": "@Nexus", "to": ["Nexus"]}), "Nexus"), "its own");
+        let l = |text: &str, to: Value| json!({"from": "alice", "text": text, "to": to, "to_source": "list"});
+        assert!(called_by_name(&l("you there?", json!(["Nexus"])), "Nexus"), "an explicit list needs no @mention");
+        assert!(called_by_name(&l("@trellis said to ask you", json!(["Nexus"])), "Nexus"), "with a list, @mentions are prose");
+        assert!(!called_by_name(&l("@Nexus look", json!(["trellis"])), "Nexus"), "a list without the agent");
+        assert!(!called_by_name(&json!({"from": "alice", "text": "@trellis tell @Nexus", "to": ["trellis", "Nexus"], "to_source": "mentions"}), "Nexus"));
     }
 
     #[test]

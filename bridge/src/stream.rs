@@ -6,6 +6,9 @@
 //! else's group channel, goes to `hear`). A `mention`, `property` or
 //! `signoff_requested` is raised on the home channel with the writer's
 //! attestation, run through the same `speaker` rule as the change log.
+//! An `edited` (desktop 0.219.0) of a message the agent has already been
+//! given, by the operator, is raised in that channel: the order changed or
+//! was withdrawn after the agent acted on it.
 //! `claim`, `participants`, `agents` and `access` trigger an immediate
 //! re-read, and `reset` re-sweeps the documents it names. Unknown types are
 //! ignored, and so are unknown fields.
@@ -24,7 +27,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const PATH: &str = "/api/agent/stream?types=hello,message,mention,property,signoff_requested,claim,participants,agents,access,reset,replaced,auth";
+const PATH: &str = "/api/agent/stream?types=hello,message,mention,property,signoff_requested,edited,claim,participants,agents,access,reset,replaced,auth";
 const ACK_EVERY: Duration = Duration::from_secs(30);
 /// How long the stream may keep failing before the long-poll takes over.
 const GIVE_UP_AFTER: Duration = Duration::from_secs(300);
@@ -338,6 +341,39 @@ impl Bridge {
                     )
                 });
             }
+            "edited" => {
+                let Some(card) = card else { return After::Continue };
+                let ch = Chan::new(&doc, card);
+                let seq = data["seq"].as_u64().unwrap_or(0);
+                if me(&data["from"]) || !self.owns(&ch) || seq == 0 {
+                    return After::Continue;
+                }
+                let cursor = self.store.lock().map(|s| s.cursor(&ch.key())).unwrap_or(0);
+                if seq > cursor {
+                    // Not read yet: the sweep reads it as it now stands.
+                    self.sweep(&ch);
+                    return After::Continue;
+                }
+                // Only the operator's own change matters: a peer's edit is
+                // conversation, and a peer's words were never orders (D12).
+                let owned = self.owned_docs.lock().map(|o| o.contains(&doc)).unwrap_or(false);
+                if crate::bridge::provenance(data, &self.operators, self.e2e_operator.as_deref(), owned) != "operator" {
+                    return After::Continue;
+                }
+                let deleted = data["deleted"].as_bool() == Some(true);
+                let stamp = data["edited_at"].as_str().unwrap_or(if deleted { "deleted" } else { "edited" });
+                if !self.first_time(&format!("edited:{doc}:{card}:{seq}"), stamp) {
+                    return After::Continue;
+                }
+                let from = data["from"].as_str().unwrap_or("operator").to_string();
+                let text = if deleted {
+                    format!("[#{seq} was deleted by {from} after you received it.] If you are still working on what it asked, stop, and say what you had already done.")
+                } else {
+                    let quoted: Vec<String> = data["text"].as_str().unwrap_or("").lines().map(|l| format!("> {l}")).collect();
+                    format!("[#{seq} was edited by {from} after you received it. It now reads:]\n{}\n\nIf this changes what you did or are doing, adjust and say so; if not, reply NO_REPLY.", quoted.join("\n"))
+                };
+                self.raise(&ch, &doc, card, data, "edited", &from, "operator", text);
+            }
             "claim" | "participants" | "agents" | "access" => self.refresh.store(true, Ordering::SeqCst),
             "reset" => {
                 let named: Vec<String> = data["documents"].as_array().into_iter().flatten().filter_map(|d| d.as_str()).map(str::to_string).collect();
@@ -444,6 +480,39 @@ mod tests {
         b.on_event(None, &env("mention", m.clone()));
         b.on_event(None, &env("mention", m));
         assert_eq!(b.events(0, Duration::from_millis(10)).len(), 2, "one assignment, one mention");
+    }
+
+    #[test]
+    fn an_operator_edit_of_a_message_already_given_is_raised_in_that_channel() {
+        let b = crate::bridge::for_test(vec![7]);
+        b.store.lock().unwrap().reset_cursor(&Chan::new("D", 7).key(), 10).unwrap();
+        let op = |extra: Value| {
+            let mut d = json!({"seq": 9, "from": "alice", "kind": "person", "via": "session", "from_key_owner": true, "text": "use the blue one", "edited_at": "2026-10-02T22:00:00Z"});
+            d.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            d
+        };
+        b.on_event(None, &env("edited", op(json!({}))));
+        b.on_event(None, &env("edited", op(json!({}))));
+        let ev = b.events(0, Duration::from_millis(10));
+        assert_eq!(ev.len(), 1, "raised once per edit");
+        assert!(ev[0].trusted && ev[0].card == 7, "in the channel itself, as the operator");
+        assert!(ev[0].text.contains("#9 was edited") && ev[0].text.contains("> use the blue one"));
+        b.on_event(None, &env("edited", op(json!({"deleted": true, "text": "(deleted)", "edited_at": "2026-10-02T22:01:00Z"}))));
+        let ev = b.events(ev[0].id, Duration::from_millis(10));
+        assert!(ev.len() == 1 && ev[0].text.contains("#9 was deleted"));
+    }
+
+    #[test]
+    fn edits_by_peers_by_itself_or_elsewhere_raise_nothing() {
+        let b = crate::bridge::for_test(vec![7]);
+        b.store.lock().unwrap().reset_cursor(&Chan::new("D", 7).key(), 10).unwrap();
+        b.on_event(None, &env("edited", json!({"seq": 9, "from": "Orbit", "kind": "agent", "via": "api", "text": "x"})));
+        b.on_event(None, &env("edited", json!({"seq": 9, "from": "Me", "kind": "agent", "text": "x"})));
+        b.on_event(None, &env("edited", json!({"seq": 9, "from": "alice", "kind": "person", "via": "api", "text": "x"})));
+        let mut other = env("edited", json!({"seq": 9, "from": "alice", "kind": "person", "via": "session", "from_key_owner": true, "text": "x"}));
+        other["card"] = json!(8);
+        b.on_event(None, &other);
+        assert!(b.events(0, Duration::from_millis(10)).is_empty());
     }
 
     #[test]
