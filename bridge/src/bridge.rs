@@ -123,9 +123,12 @@ pub const MODE_STREAM: u8 = 1;
 pub const MODE_POLL: u8 = 2;
 
 /// At most this many messages from agents (built-in or peer) in a row reach
-/// the agent in one channel before the operator speaks again. The server stops
-/// addressing anyone after 8 agent messages in a row; this stays well under.
-pub const MAX_AGENT_RUN: u32 = 4;
+/// the agent in one channel before the operator speaks again. The server's
+/// quiet spell stops addressing agents after 8 agent messages in a row in the
+/// room, which ends a two-agent exchange first; this is the backstop for a
+/// server without one. At 4 it cut real work short (#21 2248, MindSwarmAgent's
+/// answer to Orbit, dropped mid-review).
+pub const MAX_AGENT_RUN: u32 = 8;
 /// And at most this many from agents per channel per hour.
 pub const MAX_AGENT_PER_HOUR: usize = 30;
 
