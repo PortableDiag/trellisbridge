@@ -949,9 +949,23 @@ pub fn events_from(ch: &Value, c: &Chan, cursor: u64, agent: &str, operators: &[
                 trusted: false,
                 peer: false,
                 from_key_owner: m["from_key_owner"].as_bool(),
+                lead_only: !names_me(ch, m, agent),
             })
         })
         .collect()
+}
+
+/// Whether a channel message names this agent: always in a one-to-one
+/// channel; in a group, an explicit list (`to_source: "list"`) that holds it,
+/// an @mention of it, or a group word (@all, @agents, @everyone).
+fn names_me(ch: &Value, m: &Value, agent: &str) -> bool {
+    if ch["group"].as_bool() != Some(true) {
+        return true;
+    }
+    let text = m["text"].as_str().unwrap_or("");
+    let listed = m["to_source"].as_str() == Some("list")
+        && m["to"].as_array().is_some_and(|t| t.iter().any(|n| n.as_str().is_some_and(|s| s.eq_ignore_ascii_case(agent))));
+    listed || ["all", "agents", "everyone", agent].iter().any(|n| !crate::watch::mention_lines(text, n).is_empty())
 }
 
 #[cfg(test)]
@@ -1025,6 +1039,22 @@ mod tests {
         assert_eq!(ev.len(), 1);
         assert_eq!((ev[0].seq, ev[0].from.as_str(), ev[0].provenance.as_str()), (4, "OtherAgent", "agent"));
         assert_eq!((ev[0].node, ev[0].document.as_str()), (5, "D"));
+    }
+
+    #[test]
+    fn a_group_message_that_names_someone_else_reaches_the_lead_as_lead_only() {
+        let msg = |seq: u64, text: &str, to: Value, src: &str| json!({"seq": seq, "from": "operator", "kind": "person", "text": text, "to": to, "to_source": src});
+        let ch = json!({"node": 5, "seq": 6, "group": true, "lead": "Me", "messages": [
+            msg(1, "Alice that's not a great result", json!(["Me"]), "mentions"),
+            msg(2, "@Me what now", json!(["Me"]), "mentions"),
+            msg(3, "@agents report", json!(["Me", "Alice"]), "mentions"),
+            msg(4, "check this", json!(["Me"]), "list"),
+            msg(5, "@alice and @mex", json!(["Me"]), "mentions"),
+        ]});
+        let lead: Vec<(u64, bool)> = events_from(&ch, &d(9), 0, "Me", &ops(), None, true).iter().map(|e| (e.seq, e.lead_only)).collect();
+        assert_eq!(lead, vec![(1, true), (2, false), (3, false), (4, false), (5, true)]);
+        let one_to_one = json!({"node": 5, "seq": 1, "messages": [{"seq": 1, "from": "operator", "kind": "person", "text": "hmm"}]});
+        assert!(!events_from(&one_to_one, &d(9), 0, "Me", &ops(), None, true)[0].lead_only, "a one-to-one message always names us");
     }
 
     #[test]

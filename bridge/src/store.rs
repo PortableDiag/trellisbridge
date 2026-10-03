@@ -58,6 +58,12 @@ pub struct Event {
     /// agent. Absent until the server sends it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_key_owner: Option<bool>,
+    /// A group-channel message that reached this agent only as the channel's
+    /// lead: it names nobody, or only someone else ("Alice, that's not it").
+    /// Silence is a fair answer to it, so the plugin posts no warning when
+    /// the agent stays quiet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lead_only: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -242,6 +248,7 @@ mod tests {
             trusted: false,
             peer: false,
             from_key_owner: None,
+            lead_only: false,
         }
     }
 

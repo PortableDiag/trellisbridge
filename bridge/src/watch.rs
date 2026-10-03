@@ -358,6 +358,7 @@ impl Bridge {
             trusted: crate::bridge::trusted(provenance, self.builtin(from).as_ref(), doc, c["from_key_owner"].as_bool(), owned_doc),
             peer: false,
             from_key_owner: c["from_key_owner"].as_bool(),
+            lead_only: false,
         };
         let mut e = e;
         e.peer = !e.trusted && matches!(provenance, "agent" | "person" | "builtin");
