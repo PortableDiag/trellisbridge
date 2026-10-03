@@ -933,6 +933,7 @@ pub fn events_from(ch: &Value, c: &Chan, cursor: u64, agent: &str, operators: &[
             // own name the agent rightly treats it as a claim (it held a
             // Telegram send, seq 301).
             let from = if stand_in { operators.get(1).or(operators.first()).cloned().unwrap_or(from) } else { from };
+            let naming = naming(ch, m, agent);
             Some(Event {
                 id: 0,
                 document: c.doc.clone(),
@@ -949,23 +950,40 @@ pub fn events_from(ch: &Value, c: &Chan, cursor: u64, agent: &str, operators: &[
                 trusted: false,
                 peer: false,
                 from_key_owner: m["from_key_owner"].as_bool(),
-                lead_only: !names_me(ch, m, agent),
+                lead_only: naming == Naming::Nobody,
+                broadcast: naming == Naming::Group,
             })
         })
         .collect()
 }
 
-/// Whether a channel message names this agent: always in a one-to-one
-/// channel; in a group, an explicit list (`to_source: "list"`) that holds it,
-/// an @mention of it, or a group word (@all, @agents, @everyone).
-fn names_me(ch: &Value, m: &Value, agent: &str) -> bool {
+/// How a channel message names this agent.
+#[derive(Debug, PartialEq)]
+enum Naming {
+    /// By name: always in a one-to-one channel; in a group, an explicit list
+    /// (`to_source: "list"`) that holds it, or an @mention of it.
+    Me,
+    /// Only by a group word (@all, @agents, @everyone).
+    Group,
+    /// Not at all: it reached us as the channel's lead.
+    Nobody,
+}
+
+fn naming(ch: &Value, m: &Value, agent: &str) -> Naming {
     if ch["group"].as_bool() != Some(true) {
-        return true;
+        return Naming::Me;
     }
     let text = m["text"].as_str().unwrap_or("");
     let listed = m["to_source"].as_str() == Some("list")
         && m["to"].as_array().is_some_and(|t| t.iter().any(|n| n.as_str().is_some_and(|s| s.eq_ignore_ascii_case(agent))));
-    listed || ["all", "agents", "everyone", agent].iter().any(|n| !crate::watch::mention_lines(text, n).is_empty())
+    let mentioned = |n: &str| !crate::watch::mention_lines(text, n).is_empty();
+    if listed || mentioned(agent) {
+        Naming::Me
+    } else if ["all", "agents", "everyone"].iter().any(|n| mentioned(n)) {
+        Naming::Group
+    } else {
+        Naming::Nobody
+    }
 }
 
 #[cfg(test)]
@@ -1042,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn a_group_message_that_names_someone_else_reaches_the_lead_as_lead_only() {
+    fn a_group_message_that_names_someone_else_is_lead_only_and_a_group_word_is_broadcast() {
         let msg = |seq: u64, text: &str, to: Value, src: &str| json!({"seq": seq, "from": "operator", "kind": "person", "text": text, "to": to, "to_source": src});
         let ch = json!({"node": 5, "seq": 6, "group": true, "lead": "Me", "messages": [
             msg(1, "Alice that's not a great result", json!(["Me"]), "mentions"),
@@ -1050,9 +1068,11 @@ mod tests {
             msg(3, "@agents report", json!(["Me", "Alice"]), "mentions"),
             msg(4, "check this", json!(["Me"]), "list"),
             msg(5, "@alice and @mex", json!(["Me"]), "mentions"),
+            msg(6, "@agents and @Me especially", json!(["Me", "Alice"]), "mentions"),
         ]});
-        let lead: Vec<(u64, bool)> = events_from(&ch, &d(9), 0, "Me", &ops(), None, true).iter().map(|e| (e.seq, e.lead_only)).collect();
-        assert_eq!(lead, vec![(1, true), (2, false), (3, false), (4, false), (5, true)]);
+        let ev = events_from(&ch, &d(9), 0, "Me", &ops(), None, true);
+        let lead: Vec<(u64, bool, bool)> = ev.iter().map(|e| (e.seq, e.lead_only, e.broadcast)).collect();
+        assert_eq!(lead, vec![(1, true, false), (2, false, false), (3, false, true), (4, false, false), (5, true, false), (6, false, false)]);
         let one_to_one = json!({"node": 5, "seq": 1, "messages": [{"seq": 1, "from": "operator", "kind": "person", "text": "hmm"}]});
         assert!(!events_from(&one_to_one, &d(9), 0, "Me", &ops(), None, true)[0].lead_only, "a one-to-one message always names us");
     }

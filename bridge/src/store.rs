@@ -64,6 +64,11 @@ pub struct Event {
     /// the agent stays quiet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lead_only: bool,
+    /// A group-channel message that names this agent only by a group word
+    /// (@agents, @all, @everyone): a note to the room, which not every agent
+    /// must answer. Silence is fair here too; no warning is posted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub broadcast: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -249,6 +254,7 @@ mod tests {
             peer: false,
             from_key_owner: None,
             lead_only: false,
+            broadcast: false,
         }
     }
 

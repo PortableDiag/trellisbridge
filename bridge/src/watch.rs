@@ -359,6 +359,7 @@ impl Bridge {
             peer: false,
             from_key_owner: c["from_key_owner"].as_bool(),
             lead_only: false,
+            broadcast: false,
         };
         let mut e = e;
         e.peer = !e.trusted && matches!(provenance, "agent" | "person" | "builtin");
