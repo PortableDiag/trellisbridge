@@ -99,6 +99,27 @@ def _command_text(text: str) -> str:
     return _COMMAND_AFTER_MENTIONS.sub("", text, count=1)
 
 
+def _sniff_audio(data: bytes, name: str = "") -> Optional[str]:
+    """The audio type of a file by its magic bytes, or None. WebM is taken as
+    audio: in a channel it is a voice recording (Chrome and Firefox record
+    WebM/Opus); an MP4 counts only with an audio brand or a .m4a name (Safari
+    records MP4/AAC)."""
+    head = data[:16]
+    if head.startswith(b"OggS"):
+        return "audio/ogg"
+    if head.startswith(b"fLaC"):
+        return "audio/flac"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "audio/wav"
+    if head.startswith(b"ID3") or (len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
+        return "audio/mpeg"
+    if head.startswith(b"\x1aE\xdf\xa3"):
+        return "audio/webm"
+    if head[4:8] == b"ftyp" and (head[8:12] in (b"M4A ", b"M4B ") or name.lower().endswith(".m4a")):
+        return "audio/mp4"
+    return None
+
+
 def _url(extra: Dict[str, Any]) -> str:
     return _extra_or_secret(extra, "url", "TRELLISBRIDGE_URL", DEFAULT_URL).rstrip("/")
 
@@ -224,7 +245,13 @@ class TrellisAdapter(BasePlatformAdapter):
                 with open(path, "wb") as out:
                     out.write(resp.content)
                 paths.append(path)
-                types.append(resp.headers.get("content-type") or mimetypes.guess_type(path)[0] or "application/octet-stream")
+                ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
+                if ctype in ("", "application/octet-stream"):
+                    # A plain attachment download is octet-stream (only ?inline=1
+                    # names audio), and a recorder's .webm guesses as video. Judge
+                    # by the bytes, as the server does for its player.
+                    ctype = _sniff_audio(resp.content, path) or mimetypes.guess_type(path)[0] or "application/octet-stream"
+                types.append(ctype)
             except Exception as e:
                 logger.warning("[%s] could not fetch file %s on #%s: %s", self.name, f, card, e)
         return paths, types
@@ -276,6 +303,11 @@ class TrellisAdapter(BasePlatformAdapter):
             kind = MessageType.TEXT
             if paths and all(t.startswith("image/") for t in types):
                 kind = getattr(MessageType, "PHOTO", MessageType.TEXT)
+            elif paths and all(t.startswith("audio/") for t in types):
+                # A voice clip (web/desktop recorder): VOICE sends it through
+                # Hermes's own speech-to-text, as a Telegram voice note is.
+                # DOCUMENT would skip transcription.
+                kind = getattr(MessageType, "VOICE", MessageType.TEXT)
             elif paths:
                 kind = getattr(MessageType, "DOCUMENT", MessageType.TEXT)
             # Slash commands (/model, /yolo, /restart, /approve…) are the
