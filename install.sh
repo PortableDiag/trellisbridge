@@ -210,6 +210,17 @@ if [ "$MCP" = 1 ]; then
     say "note: $ENV_FILE still has MCP_TRELLIS_API_KEY — nothing uses it now; remove it to keep the Trellis key out of Hermes"
   fi
 fi
+# A Trellis channel is shared and its messages are permanent, so the agent's
+# mid-turn narration ("Let me fetch that…") and the "⏳ Working — 3 min" notice
+# each became a post of their own (#21 2574–2589). Hermes defaults a plugin
+# platform to a private chat's settings; quiet those two, unless already set.
+# The 👀 reaction still shows a turn has started.
+for key in interim_assistant_messages long_running_notifications; do
+  if ! hermes_cli config get "display.platforms.trellis.$key" >/dev/null 2>&1; then
+    hermes_cli config set "display.platforms.trellis.$key" false >/dev/null \
+      && say "display   display.platforms.trellis.$key: false"
+  fi
+done
 
 if [ "$RESTART" = 1 ]; then
   hermes_cli gateway restart >/dev/null 2>&1 && say "restarted the Hermes gateway" \
