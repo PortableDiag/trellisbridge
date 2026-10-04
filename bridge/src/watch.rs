@@ -326,8 +326,9 @@ impl Bridge {
         };
         if let Ok(mut s) = self.store.lock() {
             let _ = s.set_meta("called", json!(all));
-            // Read from just before the call, whatever an old cursor says.
-            let _ = s.reset_cursor(&ch.key(), at - 1);
+            if let Some(to) = call_cursor(s.cursor(&ch.key()), at) {
+                let _ = s.reset_cursor(&ch.key(), to);
+            }
         }
         println!("channel   {ch}: called by {} at seq {at} — answering there", m["from"].as_str().unwrap_or("?"));
         self.sweep(&ch);
@@ -513,8 +514,26 @@ pub fn mention_lines(text: &str, agent: &str) -> Vec<String> {
         .collect()
 }
 
+/// Where a channel's cursor goes when a message at `at` calls the agent in:
+/// just before the call, skipping an old cursor's backlog, but never back
+/// over what was already read. Found live (2026-10-03): a restart re-heard a
+/// call at #21 2118 that Nexus had long answered, moved its cursor back
+/// there, and Nexus answered old messages again.
+fn call_cursor(cursor: u64, at: u64) -> Option<u64> {
+    (cursor < at).then(|| at - 1)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_call_never_moves_the_cursor_back_over_what_was_read() {
+        use super::call_cursor;
+        assert_eq!(call_cursor(0, 2118), Some(2117), "a new channel reads from the call");
+        assert_eq!(call_cursor(1500, 2118), Some(2117), "an old cursor's backlog is skipped");
+        assert_eq!(call_cursor(2352, 2118), None, "already read: left alone");
+        assert_eq!(call_cursor(2118, 2118), None, "the call itself was read");
+    }
+
     use super::*;
 
     #[test]

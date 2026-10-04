@@ -401,14 +401,14 @@ class TrellisAdapter(BasePlatformAdapter):
     ) -> SendResult:
         # The agent chose silence: nothing to add. Post nothing. Hermes lets
         # only its own machinery turns end silent and replaces a human turn's
-        # NO_REPLY with a warning; an agent's message may rightly go
-        # unanswered, so for such a turn that warning is dropped too. The
-        # operator still sees it — they should know when the agent had
-        # nothing to say to them.
+        # NO_REPLY with a public warning. In a Trellis room silence is usually
+        # right (an FYI, a note to @agents, a name in passing: four false
+        # warnings on #21 and no true one), so the warning goes to the log
+        # only. The operator sees no answer and can ask again.
         c = content.strip()
-        if c.strip("[]").upper() == "NO_REPLY" or (
-                self._peer_turn.get(str(chat_id)) and c.startswith(_SILENCE_WARNING_PREFIX)):
-            logger.info("[%s] NO_REPLY on %s — nothing posted", self.name, chat_id)
+        if c.strip("[]").upper() == "NO_REPLY" or c.startswith(_SILENCE_WARNING_PREFIX):
+            logger.info("[%s] NO_REPLY on %s — nothing posted%s", self.name, chat_id,
+                        "" if self._peer_turn.get(str(chat_id)) else " (the operator named this agent)")
             return SendResult(success=True, message_id=None)
         if not self._http:
             return SendResult(success=False, error="not connected to TrellisBridge")
