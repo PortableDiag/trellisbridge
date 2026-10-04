@@ -395,9 +395,10 @@ pub(crate) fn speaker(c: &Value, operators: &[String], e2e_operator: Option<&str
     // Every key on the account is `from_key_owner`, and an unbound key with
     // no `X-Agent` is recorded `kind: person` (#2951 seq 66). The change log
     // says how a change was made (`actor`, and `via` since 0.59.3): a key is
-    // `api`, never the operator. A browser or the operator's linked Telegram
-    // chat is.
-    let via_key = c["actor"].as_str() == Some("api") || c["via"].as_str() == Some("api");
+    // `api`, never the operator. A browser, the operator's linked Telegram
+    // chat, or the operator's phone on a device key (`via: app`) is.
+    let via = c["via"].as_str();
+    let via_key = via == Some("api") || (c["actor"].as_str() == Some("api") && via != Some("app"));
     // A person's change is the operator's only when the server says it came
     // from the key owner, or — until it says — in a document the owner owns.
     let person = |op: String| -> (String, &'static str) {
@@ -570,6 +571,9 @@ mod tests {
         assert_eq!(speaker(&json!({"kind":"person","actor":"api"}), &ops, None, true).1, "person", "an unbound key with no X-Agent (#66)");
         assert_eq!(speaker(&json!({"kind":"person","via":"api"}), &ops, None, true).1, "person");
         assert_eq!(speaker(&json!({"kind":"person","via":"telegram","from_key_owner":true}), &ops, None, true).1, "operator");
+        assert_eq!(speaker(&json!({"kind":"person","actor":"api","via":"app","from_key_owner":true}), &ops, None, true).1, "operator", "the operator's phone (2754 #403)");
+        assert_eq!(speaker(&json!({"kind":"person","actor":"api","via":"app","from_key_owner":false}), &ops, None, true).1, "person");
+        assert_eq!(speaker(&json!({"kind":"person","actor":"app","from_key_owner":true}), &ops, None, true).1, "operator", "/api/changes names a device key actor app (2754 #408)");
         let e2e = json!({"kind":"agent","actor":"api","agent":"E2EOperator","agent_verified":true,"from_key_owner":true});
         assert_eq!(speaker(&e2e, &ops, Some("E2EOperator"), true).1, "operator");
         assert_eq!(speaker(&e2e, &ops, None, true).1, "agent");

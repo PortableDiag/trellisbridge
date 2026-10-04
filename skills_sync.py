@@ -11,7 +11,7 @@ installed is exactly what the server lists.
 Auto-approve is on by default since web 0.71.3 and lets ANY writer make a skill
 live, so an auto-approved skill counts only when its last writer could have
 given the agent an order (D11/D12): the operator in a browser or the linked
-Telegram chat (`kind: person`, `via: session|telegram`, `from_key_owner: true`,
+Telegram chat (`kind: person`, `via: session|telegram|app`, `from_key_owner: true`,
 web 0.72.0), or the agent itself. Since web 0.72.1 a full-access key's skill is
 live as approved (`approved_by: "<X-Agent> (full-access key)"`, setting
 `trust_full_keys`, on by default); ALICE holds one, so that approval is treated
@@ -127,7 +127,7 @@ def writer_trusted(w: dict, me: str) -> bool:
     if not isinstance(w, dict) or w.get("from_key_owner") is not True:
         return False
     if w.get("kind") == "person":
-        return w.get("via") in ("session", "telegram")
+        return w.get("via") in ("session", "telegram", "app")
     return bool(me) and w.get("name") == me and w.get("agent_verified") is True
 
 

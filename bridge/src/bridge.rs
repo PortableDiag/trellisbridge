@@ -844,9 +844,11 @@ pub fn provenance_of(kind: Option<&str>, from: &str, operators: &[String], from_
     // #2951 seq 66). Only the operator's own authenticated surfaces count, as
     // the server sets `via` from the credential: a signed-in browser
     // (`session`, trellis-web 0.59.3) or the Telegram chat the operator linked
-    // from a signed-in browser (`telegram`, 0.65.0; operator's call). Never
-    // `api`. Absent on older messages, where the rule above stands.
-    let is_operator = is_operator && matches!(via, None | Some("session") | Some("telegram"));
+    // from a signed-in browser (`telegram`, 0.65.0; operator's call), or the
+    // operator's phone app on a device key minted from a signed-in session
+    // (`app`; such a key may not carry `X-Agent`, 2754 #403). Never `api`.
+    // Absent on older messages, where the rule above stands.
+    let is_operator = is_operator && matches!(via, None | Some("session") | Some("telegram") | Some("app"));
     // The operator needs BOTH a server-recorded `kind: person` AND the owner
     // check: agent keys belong to the owner's account too (they post as
     // `agent`), and a message with no `kind` is text written into the card
@@ -1196,6 +1198,9 @@ mod tests {
         assert_eq!(provenance_of(Some("person"), "alice", &ops, Some(true), Some("api"), true), "person", "an unbound key with no X-Agent (#66)");
         assert_eq!(provenance_of(Some("person"), "alice", &ops, Some(true), Some("telegram"), true), "operator", "the operator's linked Telegram chat (web 0.65.0)");
         assert_eq!(provenance_of(Some("person"), "alice", &ops, Some(false), Some("telegram"), true), "person", "another account's Telegram");
+        assert_eq!(provenance_of(Some("person"), "alice", &ops, Some(true), Some("app"), true), "operator", "the operator's phone on a device key (2754 #403)");
+        assert_eq!(provenance_of(Some("person"), "alice", &ops, Some(false), Some("app"), true), "person", "another account's phone");
+        assert_eq!(provenance_of(Some("agent"), "alice", &ops, Some(true), Some("app"), true), "agent");
         assert_eq!(provenance_of(Some("person"), "alice", &ops, Some(true), Some("internal"), true), "person");
         // The e2e stand-in: bound, verified, on the owner's account, and configured.
         let e2e = json!({"kind":"agent","from":"E2EOperator","agent_verified":true,"from_key_owner":true});
