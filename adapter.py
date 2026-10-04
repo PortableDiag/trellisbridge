@@ -18,10 +18,12 @@ TRELLIS_ALLOW_ALL_USERS, TRELLIS_HOME_CHANNEL.
 
 import asyncio
 import base64
+import json
 import logging
 import mimetypes
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -83,6 +85,33 @@ try:
     _SILENCE_WARNING_PREFIX = _W.strip()[:40]
 except Exception:  # an internal name, so a fallback if it moves
     _SILENCE_WARNING_PREFIX = "⚠️ The model returned only a silence marker"
+
+
+# Hermes's notice to every home channel as it stops ("⚠️ Hermes is shutting
+# down — …" or "… is restarting — …"). It says "back online" only after a
+# planned restart, so a `docker restart` or `systemctl restart` left Trellis
+# with half the story (2026-10-04, #21 2389).
+_STOP_NOTICE_PREFIXES = ("⚠️ Hermes is shutting down", "⚠️ Hermes is restarting")
+
+
+def _owe_online() -> None:
+    """Leave Hermes's planned-restart marker, so the next start tells every
+    home channel "♻️ Gateway online". A marker already there is left alone."""
+    try:
+        try:
+            from hermes_constants import get_hermes_home
+            home = str(get_hermes_home())
+        except Exception:
+            home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        path = os.path.join(home, ".restart_pending.json")
+        if os.path.exists(path):
+            return
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"requested_at": time.time(), "via_service": False, "detached": False}))
+        os.replace(tmp, path)
+    except Exception as e:
+        logger.warning("[Trellis] could not leave the restart marker: %s", e)
 
 
 def _safe_body(text: str) -> str:
@@ -410,6 +439,8 @@ class TrellisAdapter(BasePlatformAdapter):
             logger.info("[%s] NO_REPLY on %s — nothing posted%s", self.name, chat_id,
                         "" if self._peer_turn.get(str(chat_id)) else " (the operator named this agent)")
             return SendResult(success=True, message_id=None)
+        if c.startswith(_STOP_NOTICE_PREFIXES):
+            _owe_online()
         if not self._http:
             return SendResult(success=False, error="not connected to TrellisBridge")
         return await _say(self._http, self._base, chat_id, content, reply_to=self._reply_seq(reply_to))
