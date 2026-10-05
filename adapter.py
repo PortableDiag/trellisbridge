@@ -93,6 +93,18 @@ except Exception:  # an internal name, so a fallback if it moves
 # with half the story (2026-10-04, #21 2389).
 _STOP_NOTICE_PREFIXES = ("⚠️ Hermes is shutting down", "⚠️ Hermes is restarting")
 
+# Hermes's status bumps: the busy ack when a message lands mid-turn and the
+# background review's "💾 …" note. Neither has a per-platform switch (the busy
+# ack's is gateway-wide, so it would silence Telegram too), and in a shared,
+# permanent channel they read as the agent talking: #21 2807, 2826, 2829, and a
+# peer's "thanks, that is all" drew a "💾" line (e2e small talk, 2026-10-05).
+# Logged, never posted.
+_STATUS_BUMP_PREFIXES = (
+    "⚡ Interrupting current task", "⏳ Queued for the next turn", "⏩ Steered into current run",
+    "↪ Redirected current run", "⏳ Subagent working", "⏳ Compressing context", "⏳ Working —",
+    "💾 ",
+)
+
 
 def _owe_online() -> None:
     """Leave Hermes's planned-restart marker, so the next start tells every
@@ -438,6 +450,9 @@ class TrellisAdapter(BasePlatformAdapter):
         if c.strip("[]").upper() == "NO_REPLY" or c.startswith(_SILENCE_WARNING_PREFIX):
             logger.info("[%s] NO_REPLY on %s — nothing posted%s", self.name, chat_id,
                         "" if self._peer_turn.get(str(chat_id)) else " (the operator named this agent)")
+            return SendResult(success=True, message_id=None)
+        if c.startswith(_STATUS_BUMP_PREFIXES):
+            logger.info("[%s] status on %s, not posted: %s", self.name, chat_id, c.splitlines()[0][:120])
             return SendResult(success=True, message_id=None)
         if c.startswith(_STOP_NOTICE_PREFIXES):
             _owe_online()
