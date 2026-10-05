@@ -288,7 +288,12 @@ fn say(bridge: &Bridge, body: &str) -> (u16, String) {
         Ok(r) => {
             let files = if r["files"].is_null() { json!([]) } else { r["files"].clone() };
             let reply_to = if r["reply_to"].is_null() { Value::Null } else { r["reply_to"].clone() };
-            (200, json!({ "card": card, "seq": r["seq"], "files": files, "native": r["native"], "reply_to": reply_to }).to_string())
+            let mut out = json!({ "card": card, "seq": r["seq"], "files": files, "native": r["native"], "reply_to": reply_to });
+            // Trellis's word when the reply misses the shape the message asked for.
+            if let Some(why) = r["expect_missed"].as_str() {
+                out["expect_missed"] = json!(why);
+            }
+            (200, out.to_string())
         }
         // No answer from Trellis: retryable, and nothing was written.
         Err(e) if e.status.is_none() => (503, error(&e.message)),

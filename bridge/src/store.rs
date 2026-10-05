@@ -69,6 +69,10 @@ pub struct Event {
     /// must answer. Silence is fair here too; no warning is posted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub broadcast: bool,
+    /// The reply the sender asked for (trellis-web 0.101.0, desktop
+    /// 0.223.0): `{shape: exact|line|number|none, value?}`. `none` is an FYI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -255,6 +259,7 @@ mod tests {
             from_key_owner: None,
             lead_only: false,
             broadcast: false,
+            expect: None,
         }
     }
 

@@ -994,6 +994,7 @@ pub fn events_from(ch: &Value, c: &Chan, cursor: u64, agent: &str, operators: &[
                 from_key_owner: m["from_key_owner"].as_bool(),
                 lead_only: naming == Naming::Nobody,
                 broadcast: naming == Naming::Group,
+                expect: m.get("expect").filter(|e| e.is_object()).cloned(),
             })
         })
         .collect()
@@ -1129,6 +1130,17 @@ mod tests {
         assert_eq!(lead, vec![(1, true, false), (2, false, false), (3, false, true), (4, false, false), (5, true, false), (6, false, false)]);
         let one_to_one = json!({"node": 5, "seq": 1, "messages": [{"seq": 1, "from": "operator", "kind": "person", "text": "hmm"}]});
         assert!(!events_from(&one_to_one, &d(9), 0, "Me", &ops(), None, true)[0].lead_only, "a one-to-one message always names us");
+    }
+
+    #[test]
+    fn the_reply_shape_a_message_asks_for_reaches_the_agent() {
+        let ch = json!({"node": 5, "seq": 2, "messages": [
+            {"seq": 1, "from": "operator", "kind": "person", "text": "ping", "expect": {"shape": "exact", "value": "pong-7"}},
+            {"seq": 2, "from": "operator", "kind": "person", "text": "fyi"},
+        ]});
+        let ev = events_from(&ch, &d(9), 0, "Me", &ops(), None, true);
+        assert_eq!(ev[0].expect, Some(json!({"shape": "exact", "value": "pong-7"})));
+        assert_eq!(ev[1].expect, None);
     }
 
     #[test]
