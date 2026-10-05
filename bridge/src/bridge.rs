@@ -147,6 +147,13 @@ pub struct Status {
     pub refused: Vec<(Chan, String)>,
     /// How each document's change watcher is woken: `wait` or `poll`.
     pub watch: std::collections::BTreeMap<String, String>,
+    /// The key as Trellis last described it (`GET /api/whoami`): label,
+    /// binding, expiry, or the refusal. Re-read with the built-in agents, so
+    /// health answers "is the credential still good" without a call.
+    pub key: Option<Value>,
+    pub key_read: Option<Instant>,
+    /// The Hermes plugin's version, as it reported it on connecting.
+    pub plugin: Option<String>,
 }
 
 impl Bridge {
@@ -318,6 +325,35 @@ impl Bridge {
         }
     }
 
+    /// Re-read what Trellis says about this key, at most every 10 minutes.
+    /// A 401 or 403 is kept as `ok: false` with Trellis's words.
+    pub fn refresh_key(&self) {
+        let Some(client) = self.client.as_ref() else { return };
+        let due = self.status().key_read.map(|t| t.elapsed() >= Duration::from_secs(600)).unwrap_or(true);
+        if !due {
+            return;
+        }
+        let key = match client.get("/api/whoami") {
+            Ok(v) => Some(key_row(&v)),
+            Err(Failed { status: Some(s @ (401 | 403)), message }) => {
+                Some(json!({ "ok": false, "status": s, "error": message }))
+            }
+            Err(_) => None, // unreachable says nothing about the key: keep the last answer
+        };
+        if let Ok(mut st) = self.status.lock() {
+            st.key_read = Some(Instant::now());
+            if key.is_some() {
+                st.key = key;
+            }
+        }
+    }
+
+    pub fn set_plugin(&self, version: &str) {
+        if let Ok(mut st) = self.status.lock() {
+            st.plugin = Some(version.chars().take(40).collect());
+        }
+    }
+
     pub fn builtin(&self, name: &str) -> Option<Value> {
         self.builtins.lock().ok().and_then(|b| b.get(name).cloned())
     }
@@ -433,6 +469,7 @@ impl Bridge {
             }
             if tick.is_multiple_of(10) || forced {
                 self.refresh_builtins();
+                self.refresh_key();
             }
             if self.discover && ((tick.is_multiple_of(10) && tick > 0) || forced) {
                 if let Ok(docs) = self.discover_documents() {
@@ -989,6 +1026,18 @@ fn naming(ch: &Value, m: &Value, agent: &str) -> Naming {
     } else {
         Naming::Nobody
     }
+}
+
+/// The parts of `GET /api/whoami` that say whether the key still works. A
+/// desktop answers without a `key` object: then only `ok`.
+fn key_row(who: &Value) -> Value {
+    let k = &who["key"];
+    json!({
+        "ok": true,
+        "label": k["label"],
+        "bound_agent": k["bound_agent"],
+        "expires_at": k["expires_at"],
+    })
 }
 
 #[cfg(test)]

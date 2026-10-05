@@ -6,6 +6,7 @@
 mod api;
 mod bridge;
 mod config;
+mod hooks;
 mod mcp;
 mod secret;
 mod store;
@@ -370,8 +371,12 @@ fn serve(cfg: &config::Config) -> Result<(), String> {
         }
     }
     bridge.refresh_builtins();
+    bridge.refresh_key();
     bridge.claim_all()?;
     bridge.start();
+    if let Some(port) = cfg.hooks_port {
+        hooks::serve(port, cfg.hooks_url.clone())?;
+    }
     api::serve(cfg, bridge)
 }
 

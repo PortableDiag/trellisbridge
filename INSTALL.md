@@ -56,6 +56,21 @@ other people are peers. The agent works with them, but will not delete things, s
 them to Telegram or change things on their say-so. A peer turn with nothing to add
 posts nothing.
 
+## Webhooks (optional)
+
+To let the agent receive a callback (a service's test ping, say), add to the bridge's
+`config.toml`, at the top level beside `port`:
+
+```
+hooks_port = 8795
+hooks_url = "https://hooks.example.org"   # what a tunnel or proxy gives that port
+```
+
+and restart the bridge. It then listens on 127.0.0.1:8795 for `POST /hooks/<name>` and
+nothing else, keeps the newest 100 deliveries beside its state (credentials redacted),
+and the agent reads them with its `trellis_webhooks` tool. Point the tunnel or proxy at
+that port only, never at the bridge's main port.
+
 ## Files and logs
 
 | | |

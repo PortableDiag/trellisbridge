@@ -18,6 +18,14 @@ pub struct Config {
     /// before these existed, so each has a default.
     #[serde(default)]
     pub trellis: Trellis,
+    /// A second loopback port that answers only `POST /hooks/<name>`, for
+    /// webhook callbacks (see `hooks`). Unset: no receiver.
+    #[serde(default)]
+    pub hooks_port: Option<u16>,
+    /// The public address a tunnel or proxy gives `hooks_port`, which the
+    /// agent hands to senders. Empty: the loopback address.
+    #[serde(default)]
+    pub hooks_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +131,8 @@ impl Default for Config {
             port: DEFAULT_PORT,
             api_key: generate_key(),
             trellis: Trellis::default(),
+            hooks_port: None,
+            hooks_url: String::new(),
         }
     }
 }

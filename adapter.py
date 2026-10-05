@@ -106,6 +106,25 @@ _STATUS_BUMP_PREFIXES = (
 )
 
 
+def _plugin_version() -> str:
+    try:
+        for line in open(os.path.join(os.path.dirname(__file__), "plugin.yaml")):
+            if line.startswith("version:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _bridge_release() -> str:
+    """The bridge release this plugin was published with ("" when unknown)."""
+    try:
+        from .cli import _version
+        return _version()
+    except (Exception, SystemExit):
+        return ""
+
+
 def _owe_online() -> None:
     """Leave Hermes's planned-restart marker, so the next start tells every
     home channel "♻️ Gateway online". A marker already there is left alone."""
@@ -229,11 +248,31 @@ class TrellisAdapter(BasePlatformAdapter):
             self._mark_connected()
             logger.info("[%s] Connected to TrellisBridge %s as %s", self.name,
                         health.json().get("version"), health.json().get("agent"))
+            await self._report_versions(health.json(), is_reconnect)
             self._wire_plugin_handlers(None)
             return True
         except Exception as e:
             logger.error("[%s] Cannot reach TrellisBridge at %s: %s", self.name, self._base, e)
             return False
+
+    async def _report_versions(self, health: Dict[str, Any], is_reconnect: bool) -> None:
+        """Tell the bridge our version (its /api/health shows it), and say once,
+        in the home channel, when the bridge is not the release this plugin
+        ships with: an upgrade done half-way answers with the old bridge and
+        nothing shows it (AgentTests #345)."""
+        try:
+            await self._http.post(f"{self._base}/api/plugin", json={"version": _plugin_version()}, timeout=10.0)
+        except Exception as e:  # an older bridge has no such route
+            logger.debug("[%s] plugin version not reported: %s", self.name, e)
+        want, have = _bridge_release(), str(health.get("version") or "")
+        if is_reconnect or not want or not have or want == have:
+            return
+        logger.warning("[%s] TrellisBridge %s is running; this plugin goes with %s", self.name, have, want)
+        home = health.get("home") or {}
+        if home.get("card"):
+            await _say(self._http, self._base, self._chat_id(home.get("document"), home["card"]),
+                       f"⚠️ TrellisBridge {have} is running, but this plugin (trellis-platform {_plugin_version()}) "
+                       f"goes with bridge {want}. Finish the upgrade: `hermes trellis setup`.")
 
     async def _run(self) -> None:
         backoff = 0

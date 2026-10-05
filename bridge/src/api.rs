@@ -169,6 +169,17 @@ pub fn route(bridge: &Bridge, method: &str, path: &str, query: &str, body: &str,
             }
         }
         ("POST", ["api", "say"]) => say(bridge, body),
+        // The plugin says which version it is on connecting, for health.
+        ("POST", ["api", "plugin"]) => {
+            let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+            match v["version"].as_str() {
+                Some(version) => {
+                    bridge.set_plugin(version);
+                    (200, json!({ "bridge": VERSION }).to_string())
+                }
+                None => (400, error("body {version}")),
+            }
+        }
         ("POST", ["api", "react"]) => react(bridge, body),
         // Any JSON route, with a body the plugin has put a file into
         // (`image_base64`, `data_base64`…). The model names the route; the
@@ -353,6 +364,12 @@ fn health(bridge: &Bridge) -> Value {
         "version": VERSION,
         "agent": bridge.agent,
         "trellis": { "reachable": st.trellis_ok, "last_error": st.last_error },
+        "key": st.key.as_ref().map(|k| {
+            let mut k = k.clone();
+            k["checked_s_ago"] = json!(st.key_read.map(|t| t.elapsed().as_secs()));
+            k
+        }),
+        "plugin": st.plugin,
         "pending": pending,
         "channels": cursors,
         "document": bridge.document,
@@ -422,6 +439,18 @@ mod tests {
         let (status, body) = get(&for_test(vec![]), "/api/health", "", false);
         assert_eq!(status, 200);
         assert!(body.contains("\"version\""));
+    }
+
+    #[test]
+    fn health_shows_the_plugin_version_it_was_told() {
+        let b = for_test(vec![]);
+        assert_eq!(route(&b, "POST", "/api/plugin", "", r#"{"version":"0.4.14"}"#, false).0, 401);
+        assert_eq!(route(&b, "POST", "/api/plugin", "", r#"{}"#, true).0, 400);
+        assert_eq!(route(&b, "POST", "/api/plugin", "", r#"{"version":"0.4.14"}"#, true).0, 200);
+        let (_, body) = get(&b, "/api/health", "", false);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["plugin"], "0.4.14");
+        assert!(v["key"].is_null(), "no Trellis client, no key read: {body}");
     }
 
     #[test]

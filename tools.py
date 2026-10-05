@@ -155,7 +155,7 @@ def with_file(args: dict, **kw) -> str:
 def fetch(args: dict, **kw) -> str:
     """Any Trellis route that answers bytes, saved to a local file."""
     path = args.get("path", "")
-    if not path.startswith("/api/"):
+    if not (path.startswith("/api/") or path.split("?")[0] == "/api"):  # /api itself: the route list
         return _err("path must start with /api/")
     base, headers = _bridge()
     r = httpx.get(f"{base}/api/trellis-bytes", params={"path": path, **_doc(args)}, headers=headers, timeout=180.0)
@@ -263,9 +263,11 @@ FETCH = _schema(
     "&download=1 for the file rather than JSON; a basket: /api/nodes/{id}/export?"
     "format=markdown|html|json|mermaid&download=1, since without download=1 it answers JSON "
     "with the text in `content`), an attachment "
-    "(/api/cards/{cid}/attachments/{n} — also a `kind: file` in a channel message). Returns "
-    "the local path — open it with your file or vision tools, or send it on.",
-    {"path": {"type": "string", "description": "GET route, starts with /api/"},
+    "(/api/cards/{cid}/attachments/{n} — also a `kind: file` in a channel message). Also any "
+    "JSON answer, whole and at any size: a long channel read, or GET /api, the list of every "
+    "route. Returns the local path — open it with your file or vision tools, or "
+    "send it on.",
+    {"path": {"type": "string", "description": "GET route: /api itself, or starting with /api/"},
      "save_as": {"type": "string", "description": "File name (default: from Trellis)"},
      "document": {"type": "string", "description": "Document id, when not the default (GET /api/agent lists them)"}},
     ("path",))
