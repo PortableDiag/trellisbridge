@@ -115,7 +115,9 @@ fn run() -> Result<(), String> {
             println!("  trellisbridge init --key-file PATH [--agent NAME] [--port N] [--url URL] [--force]");
             println!("                           write the config for an agent key: its name and document from GET /api/whoami");
             println!("  trellisbridge card [--avatar PATH | --no-avatar] [--description TEXT]");
-            println!("                           save the agent card's settings, then publish it (avatar shown in channels)");
+            println!("                           save the agent card's settings, then publish it (avatar shown in channels);");
+            println!("                           only what you pass changes, and the card's skills stay. At startup the");
+            println!("                           bridge publishes the card only if the agent has none yet");
             println!("  trellisbridge serve      run the API (default)");
             println!("  trellisbridge key        print the API key");
             println!("  trellisbridge check      load the Trellis key and prove it works");
@@ -364,10 +366,16 @@ fn serve(cfg: &config::Config) -> Result<(), String> {
             Err(e) => eprintln!("trellisbridge: listing documents: {} — following only {}", e.message, bridge.document),
         }
     }
+    // A card that exists is the agent's to keep: it may have changed its own
+    // picture or skills since, and a restart must not put the old ones back.
     if let Some(client) = &bridge.client {
-        match publish_card(client, t, false) {
-            Ok(line) => println!("card      {line}"),
-            Err(e) => eprintln!("trellisbridge: agent card not published: {e}"),
+        match current_card(client) {
+            Ok(Some(c)) => println!("card      kept as published ({} skills); `trellisbridge card` changes it", c["skills"].as_array().map_or(0, |s| s.len())),
+            Ok(None) => match publish_card(client, t, None, None, Picture::Set) {
+                Ok(line) => println!("card      {line}"),
+                Err(e) => eprintln!("trellisbridge: agent card not published: {e}"),
+            },
+            Err(e) => eprintln!("trellisbridge: agent card not checked: {e} — left as it is"),
         }
     }
     bridge.refresh_builtins();
@@ -383,29 +391,76 @@ fn serve(cfg: &config::Config) -> Result<(), String> {
 /// Most the server takes for a picture (decoded): web and desktop agree.
 const MAX_AVATAR: u64 = 256 * 1024;
 
-/// Publish the agent's card: its description, and its picture when `avatar`
-/// is set (`remove` sends `icon_base64: null`, the server's "no picture").
-/// An absent picture keeps whatever the card had. Needs a key bound to the
-/// agent's name; an unbound one gets the server's own 403.
-fn publish_card(client: &trellis::Client, t: &config::Trellis, remove: bool) -> Result<String, String> {
-    use base64::Engine;
-    let description = match t.description.trim() {
-        "" => format!("{}: a Hermes agent in this workspace, connected through TrellisBridge.", t.agent),
-        d => d.to_string(),
+/// What a card write does with the picture.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Picture {
+    /// Leave the card's picture as it is.
+    Keep,
+    /// Send the configured `avatar` (when one is set).
+    Set,
+    /// `icon_base64: null`, the server's "no picture".
+    Remove,
+}
+
+/// The agent's card as published now, or `None` when it has none (404).
+fn current_card(client: &trellis::Client) -> Result<Option<serde_json::Value>, String> {
+    match client.get("/api/agents/card") {
+        Ok(v) => Ok(Some(v.get("card").cloned().unwrap_or(v))),
+        Err(e) if e.status == Some(404) => Ok(None),
+        Err(e) => Err(e.message),
+    }
+}
+
+/// The body of a card write. A write replaces the card, so everything the
+/// live card has (`base`) goes back unless this write changes it: the
+/// description unless `description` is given, and always its skills and
+/// version, which only the agent itself sets. With no card yet, the
+/// description is the configured one or a one-line default.
+fn card_body(base: Option<&serde_json::Value>, description: Option<&str>, agent: &str, icon: Option<serde_json::Value>) -> serde_json::Value {
+    let description = match (description.map(str::trim), base.and_then(|b| b["description"].as_str())) {
+        (Some(d), _) if !d.is_empty() => d.to_string(),
+        (_, Some(d)) if !d.is_empty() => d.to_string(),
+        _ => format!("{agent}: a Hermes agent in this workspace, connected through TrellisBridge."),
     };
     let mut body = serde_json::json!({ "description": description });
-    let mut note = "no picture set".to_string();
-    if remove {
-        body["icon_base64"] = serde_json::Value::Null;
-        note = "picture removed".into();
-    } else if let Some(path) = &t.avatar {
-        let bytes = std::fs::read(path).map_err(|e| format!("avatar {}: {e}", path.display()))?;
-        if bytes.len() as u64 > MAX_AVATAR {
-            return Err(format!("avatar {} is {} KB; the server takes at most 256 KB — shrink it (256×256 is plenty)", path.display(), bytes.len() / 1024));
+    for k in ["skills", "version"] {
+        if let Some(v) = base.and_then(|b| b.get(k)).filter(|v| !v.is_null()) {
+            body[k] = v.clone();
         }
-        body["icon_base64"] = base64::engine::general_purpose::STANDARD.encode(&bytes).into();
-        note = format!("avatar {}", path.display());
     }
+    if let Some(icon) = icon {
+        body["icon_base64"] = icon;
+    }
+    body
+}
+
+/// Write the agent's card over `base` (the live card, if any): `description`
+/// replaces its text, and `picture` says what happens to its picture. Needs
+/// a key bound to the agent's name; an unbound one gets the server's own 403.
+fn publish_card(client: &trellis::Client, t: &config::Trellis, base: Option<&serde_json::Value>, description: Option<&str>, picture: Picture) -> Result<String, String> {
+    use base64::Engine;
+    let mut note = "picture kept".to_string();
+    let icon = match (picture, &t.avatar) {
+        (Picture::Remove, _) => {
+            note = "picture removed".into();
+            Some(serde_json::Value::Null)
+        }
+        (Picture::Set, Some(path)) => {
+            let bytes = std::fs::read(path).map_err(|e| format!("avatar {}: {e}", path.display()))?;
+            if bytes.len() as u64 > MAX_AVATAR {
+                return Err(format!("avatar {} is {} KB; the server takes at most 256 KB — shrink it (256×256 is plenty)", path.display(), bytes.len() / 1024));
+            }
+            note = format!("avatar {}", path.display());
+            Some(base64::engine::general_purpose::STANDARD.encode(&bytes).into())
+        }
+        (Picture::Set, None) if base.is_none() => {
+            note = "no picture set".into();
+            None
+        }
+        _ => None,
+    };
+    let description = description.or(base.is_none().then_some(t.description.as_str()));
+    let body = card_body(base, description, &t.agent, icon);
     let v = client.post("/api/agents/card", &body)?;
     let icon = v["icon_url"].as_str().or_else(|| v["card"]["icon_url"].as_str()).unwrap_or("none");
     Ok(format!("published as {} — {note}; icon {icon}", t.agent))
@@ -416,7 +471,7 @@ fn publish_card(client: &trellis::Client, t: &config::Trellis, remove: bool) -> 
 fn card(args: Vec<String>) -> Result<(), String> {
     let path = config::config_path()?;
     let mut cfg = config::Config::load_or_create(Some(&path))?;
-    let (mut changed, mut remove) = (false, false);
+    let (mut picture, mut description) = (Picture::Keep, None);
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -424,23 +479,29 @@ fn card(args: Vec<String>) -> Result<(), String> {
                 let p = it.next().ok_or("--avatar PATH")?;
                 let p = std::fs::canonicalize(&p).map_err(|e| format!("{p}: {e}"))?;
                 cfg.trellis.avatar = Some(p);
-                changed = true;
+                picture = Picture::Set;
             }
             "--no-avatar" => {
                 cfg.trellis.avatar = None;
-                remove = true;
-                changed = true;
+                picture = Picture::Remove;
             }
             "--description" => {
-                cfg.trellis.description = it.next().ok_or("--description TEXT")?;
-                changed = true;
+                let d = it.next().ok_or("--description TEXT")?;
+                cfg.trellis.description = d.clone();
+                description = Some(d);
             }
             other => return Err(format!("card: unknown option {other:?} — try --help")),
         }
     }
+    let changed = picture != Picture::Keep || description.is_some();
     let mut t = cfg.trellis.clone();
     let client = connect(&mut t, "trellisbridge card")?;
-    let line = publish_card(&client, &t, remove)?;
+    let base = current_card(&client)?;
+    // No card yet: publish the saved settings in full.
+    if base.is_none() && picture == Picture::Keep {
+        picture = Picture::Set;
+    }
+    let line = publish_card(&client, &t, base.as_ref(), description.as_deref(), picture)?;
     if changed {
         cfg.save(&path)?;
     }
@@ -480,5 +541,30 @@ mod version_tests {
         assert!(super::version_at_least("0.212.0", (0, 211, 4)));
         assert!(!super::version_at_least("0.211.2", (0, 211, 4)));
         assert!(!super::version_at_least("", (0, 211, 4)));
+    }
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::card_body;
+    use serde_json::json;
+
+    #[test]
+    fn a_write_keeps_what_the_agent_set() {
+        let live = json!({"name": "Nexus", "description": "mine", "skills": [{"name": "a"}], "version": "1.0.1", "icon_url": "/api/avatars/x"});
+        // A picture-only write: text, skills and version go back unchanged.
+        let b = card_body(Some(&live), None, "Nexus", Some(json!("AAAA")));
+        assert_eq!(b, json!({"description": "mine", "skills": [{"name": "a"}], "version": "1.0.1", "icon_base64": "AAAA"}));
+        // A new description: still the skills, and no picture field (kept).
+        let b = card_body(Some(&live), Some("new"), "Nexus", None);
+        assert_eq!(b, json!({"description": "new", "skills": [{"name": "a"}], "version": "1.0.1"}));
+    }
+
+    #[test]
+    fn a_first_card_uses_the_config_or_a_default() {
+        assert_eq!(card_body(None, Some("set"), "Orbit", None), json!({"description": "set"}));
+        let b = card_body(None, Some("  "), "Orbit", None);
+        assert!(b["description"].as_str().unwrap().starts_with("Orbit: a Hermes agent"));
+        assert!(b.get("skills").is_none());
     }
 }

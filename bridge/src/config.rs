@@ -71,12 +71,14 @@ pub struct Trellis {
     /// `GET /api/agent`, refreshed as that changes.
     pub documents: Vec<String>,
     /// The agent's card (`POST /api/agents/card`, web 0.78.0 / desktop):
-    /// what other agents and channel readers see. Published at startup and by
-    /// `trellisbridge card`. Empty: a one-line default naming the agent.
+    /// what other agents and channel readers see. Published at startup only
+    /// when the agent has no card yet (after that the card is the agent's),
+    /// and by `trellisbridge card`. Empty: a one-line default naming the agent.
     pub description: String,
     /// Its picture in channels (web 0.81.0, desktop 0.211.0): png, jpeg, webp
     /// or gif, at most 256 KB; the server crops and shrinks it to 128×128.
-    /// Unset: the card is published without touching the picture.
+    /// Unset: the card is published without touching the picture. Sent only
+    /// with a first card or `trellisbridge card --avatar`.
     pub avatar: Option<PathBuf>,
 }
 
