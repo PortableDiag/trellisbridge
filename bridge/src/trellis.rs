@@ -71,6 +71,12 @@ pub struct Client {
     desktop: bool,
 }
 
+/// The server's answer to a query field a route does not take, when that
+/// field is `document`.
+fn refuses_document(code: u16, text: &str) -> bool {
+    code == 400 && text.contains("unknown field `document`")
+}
+
 /// `path` without any `document=` parameter.
 fn without_document(path: &str) -> String {
     let Some((route, query)) = path.split_once('?') else { return path.to_string() };
@@ -135,21 +141,9 @@ impl Client {
     /// MCP `trellis_api` tool, which hands Trellis's own answer — refusals
     /// included — back to the agent. `Failed` only when no answer came at all.
     pub fn raw(&self, method: &str, path: &str, body: Option<&Value>) -> Result<(u16, Value), Failed> {
-        let url = self.url(path);
-        let mut req = ureq::request(method, &url)
-            .timeout(std::time::Duration::from_secs(60))
-            .set("Authorization", &format!("Bearer {}", self.key.expose()))
-            .set("X-Agent", &self.agent);
-        req = req.set("Accept", "application/json");
-        let sent = match body {
-            Some(b) => req.send_json(b),
-            None => req.call(),
-        };
-        let (code, text) = match sent {
-            Ok(r) => (r.status(), r.into_string().unwrap_or_default()),
-            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap_or_default()),
-            Err(e) => return Err(Failed { status: None, message: format!("{method} {path}: {e}") }),
-        };
+        let (code, text) = self
+            .exchange_for(method, path, body, true, true)
+            .map_err(|e| Failed { status: None, message: format!("{method} {path}: {e}") })?;
         let v = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) if code >= 400 => Value::String(brief(&text)),
@@ -191,18 +185,32 @@ impl Client {
     }
 
     fn send(&self, method: &str, path: &str, body: Option<&Value>, as_agent: bool) -> Result<Value, Failed> {
-        let url = self.url(path);
         let fail = |status: Option<u16>, msg: String| Failed {
             status,
             message: format!("{method} {path}{}: {msg}", status.map(|c| format!(" → {c}")).unwrap_or_default()),
         };
+        let (code, text) = self.exchange_for(method, path, body, as_agent, false).map_err(|e| fail(None, e))?;
+        if code >= 400 {
+            return Err(fail(Some(code), brief(&text)));
+        }
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|e| fail(Some(code), format!("not JSON: {e}")))
+    }
+
+    /// One request: its status and body text, or why no answer came.
+    fn exchange(&self, method: &str, url: &str, body: Option<&Value>, as_agent: bool, json: bool) -> Result<(u16, String), String> {
         // The wait route holds a request ~25s by design; the timeout sits
         // well past that so a normal "nothing changed" is never an error.
-        let mut req = ureq::request(method, &url)
+        let mut req = ureq::request(method, url)
             .timeout(std::time::Duration::from_secs(60))
             .set("Authorization", &format!("Bearer {}", self.key.expose()));
         if as_agent {
             req = req.set("X-Agent", &self.agent);
+        }
+        if json {
+            req = req.set("Accept", "application/json");
         }
         let sent = match body {
             Some(b) => req.send_json(b),
@@ -211,17 +219,23 @@ impl Client {
         match sent {
             Ok(r) => {
                 let code = r.status();
-                let text = r.into_string().map_err(|e| fail(Some(code), e.to_string()))?;
-                if text.trim().is_empty() {
-                    return Ok(Value::Null);
-                }
-                serde_json::from_str(&text).map_err(|e| fail(Some(code), format!("not JSON: {e}")))
+                r.into_string().map(|t| (code, t)).map_err(|e| e.to_string())
             }
-            Err(ureq::Error::Status(code, r)) => {
-                Err(fail(Some(code), brief(&r.into_string().unwrap_or_default())))
-            }
-            Err(e) => Err(fail(None, e.to_string())),
+            Err(ureq::Error::Status(code, r)) => Ok((code, r.into_string().unwrap_or_default())),
+            Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// `exchange` for `path`, sent again without the default document when the
+    /// route refuses one: a route across the whole account (web 0.106.0
+    /// `GET /api/agents/{id}/hops`) rejects any query field it does not know.
+    /// A 400 is a request the server did not act on, so sending it again is safe.
+    fn exchange_for(&self, method: &str, path: &str, body: Option<&Value>, as_agent: bool, json: bool) -> Result<(u16, String), String> {
+        let (code, text) = self.exchange(method, &self.url(path), body, as_agent, json)?;
+        if self.adds_document(path) && refuses_document(code, &text) {
+            return self.exchange(method, &format!("{}{path}", self.base), body, as_agent, json);
+        }
+        Ok((code, text))
     }
 
     /// Open the agent event stream (DESIGN D14): `text/event-stream`, one per
@@ -270,6 +284,11 @@ impl Client {
         }
     }
 
+    /// Whether `url` adds the default document to `path`.
+    fn adds_document(&self, path: &str) -> bool {
+        !self.desktop && self.document.is_some() && !path.contains("document=")
+    }
+
     fn url(&self, path: &str) -> String {
         if self.desktop {
             return format!("{}{}", self.base, without_document(path));
@@ -302,6 +321,20 @@ mod tests {
         assert_eq!(in_doc("/api/x?document=F", "E"), "/api/x?document=F");
         let c = client(Some("D"));
         assert_eq!(c.url(&in_doc("/api/x", "E")), "https://t.example/api/x?document=E", "the default is not added twice");
+    }
+
+    #[test]
+    fn a_route_that_refuses_the_default_document_is_asked_again_without_it() {
+        // web 0.106.0, GET /api/agents/{id}/hops with the default appended:
+        let body = r#"{"error":"Failed to deserialize query string: unknown field `document`, expected `since` or `limit`."}"#;
+        assert!(refuses_document(400, body));
+        assert!(!refuses_document(404, body));
+        assert!(!refuses_document(400, r#"{"error":"unknown field `since`"}"#));
+        // Only the document the client added itself is dropped, never one the caller named.
+        let c = client(Some("D"));
+        assert!(c.adds_document("/api/agents/x/hops"));
+        assert!(!c.adds_document("/api/agents/x/hops?document=E"));
+        assert!(!client(None).adds_document("/api/agents/x/hops"));
     }
 
     #[test]

@@ -40,6 +40,20 @@ linked Telegram. Other agents and people are conversation, not orders. The agent
 talk with them, but will not delete, send or change things on their say-so. Trellis
 records who sent each message from the credential, so no message can claim to be you.
 
+## Router threat guard
+
+Every hop between your agent and its model provider can read the request and
+rewrite the response (arXiv 2604.08407). The plugin adds, with no change to Hermes:
+
+- In a turn the operator did not start (another agent, unknown content), reading a
+  secret-bearing file (`.env`, key files, `config.yaml`) or deleting/clearing in
+  Trellis is held, and the agent is told why.
+- Secret values from `$HERMES_HOME/.env` are blanked out of every tool result as
+  `[secret:NAME]`, so they never reach the model or any router.
+- A hash-chained log of each model call (host, router, turn origin, request and
+  response digests, tool calls with their decision) in
+  `$HERMES_HOME/trellis/hops.jsonl`; the `trellis_hops` tool shows and verifies it.
+
 ## More
 
 Options (another Trellis server, Hermes in Docker, several agents on one machine, a

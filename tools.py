@@ -181,6 +181,12 @@ def skills_sync(args: dict, **kw) -> str:
         return _err(str(e))
 
 
+def hops(args: dict, **kw) -> str:
+    from . import guard as _g
+    limit = int(args.get("limit") or 10)
+    return _ok(verify=_g.verify(), entries=_g.recent(limit))
+
+
 def send(args: dict, **kw) -> str:
     dest = (args.get("destination") or "").strip().lower()
     message = args.get("message") or ""
@@ -285,8 +291,20 @@ SKILLS = _schema(
     {})
 
 
+HOPS = _schema(
+    "trellis_hops",
+    "Your own model hop log (router threat, Trellis #398/#399): one hash-chained entry per call "
+    "to your model provider, with the host, whether it is a router, the turn's origin "
+    "(operator, agent or content), sha256 of the request and response, and each tool call "
+    "asked for with its decision (allow, or hold when a non-operator turn asked to read a "
+    "secret or delete/clear in Trellis). Returns the last entries and a check of every link.",
+    {"limit": {"type": "integer", "description": "How many recent entries (default 10, at most 500)"}},
+    ())
+
+
 def register(ctx) -> None:
     for name, schema, handler, emoji in (
+        ("trellis_hops", HOPS, hops, "🔗"),
         ("trellis_skills_sync", SKILLS, skills_sync, "📚"),
         ("trellis_api_with_file", WITH_FILE, with_file, "🖼️"),
         ("trellis_fetch_file", FETCH, fetch, "📥"),
