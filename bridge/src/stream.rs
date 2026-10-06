@@ -27,7 +27,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const PATH: &str = "/api/agent/stream?types=hello,message,mention,property,signoff_requested,edited,claim,participants,agents,access,reset,replaced,auth";
+const PATH: &str = "/api/agent/stream?types=hello,message,mention,property,task,signoff_requested,edited,claim,participants,agents,access,reset,replaced,auth";
 const ACK_EVERY: Duration = Duration::from_secs(30);
 /// How long the stream may keep failing before the long-poll takes over.
 const GIVE_UP_AFTER: Duration = Duration::from_secs(300);
@@ -536,6 +536,14 @@ mod tests {
         assert_eq!(ev.len(), 2, "{:?}", ev.iter().map(|e| &e.text).collect::<Vec<_>>());
         assert!(ev[0].trusted && ev[0].text.contains("line 1 of checklist card #7, \"Walk dog\""), "{}", ev[0].text);
         assert!(ev[1].text.contains("\"Feed cat\""), "{}", ev[1].text);
+    }
+
+    #[test]
+    fn every_type_handled_is_subscribed() {
+        let asked: Vec<&str> = PATH.split("types=").nth(1).unwrap().split(',').collect();
+        for t in ["message", "mention", "property", "task", "signoff_requested", "edited"] {
+            assert!(asked.contains(&t), "{t} is handled but not asked for: {PATH}");
+        }
     }
 
     #[test]
