@@ -21,7 +21,9 @@ provider sees the plaintext request and may rewrite the response, so:
 4. **A hash-chained hop log** (#399 item 5, client half; #398 chain form). One
    entry per model call, in $HERMES_HOME/trellis/hops.jsonl: seq, prev, ts,
    hop {host, model, router}, turn {origin, ask_sha256}, req_sha256,
-   resp_sha256, calls [{name, args_sha256, decision}], hash. `decision` is
+   resp_sha256, calls [{name, args_sha256, decision}], hash. The calls come
+   from the tool hooks, which carry the real name and arguments, and an entry
+   is written once its tools have run. `decision` is
    allow, hold (the gate), or flag: a host this session had not reached yet,
    in a turn the operator did not start (#399 item 4; records, never blocks).
    One chain per
@@ -160,9 +162,12 @@ def decision(o: str, tool_name: str, args: Any) -> str:
     return "hold" if o != "operator" and held(tool_name, args) else "allow"
 
 
-def _pre_tool_call(tool_name: str = "", args: Any = None, turn_id: str = "", **_) -> Optional[dict]:
+def _pre_tool_call(tool_name: str = "", args: Any = None, turn_id: str = "", session_id: str = "",
+                   api_request_id: str = "", **_) -> Optional[dict]:
     o, _ask = origin(turn_id)
-    if decision(o, tool_name, args) != "hold":
+    d = decision(o, tool_name, args)
+    _record_call(o, tool_name, args, d, turn_id, session_id, api_request_id)
+    if d != "hold":
         return None
     who = {"agent": "another agent"}.get(o, "something other than the operator's own message")
     logger.warning("[trellis guard] held %s in a %s-origin turn", tool_name, o)
@@ -241,6 +246,11 @@ _PROVIDERS = {
     "inference-api.nousresearch.com", "api.fireworks.ai", "api.cerebras.ai",
 }
 _pending: Dict[str, Dict[str, Any]] = {}
+# Entries whose model response is in but whose tool calls may still be coming:
+# api_request_id -> entry, and turn_id -> the latest such id. Written when the
+# turn asks the model again, or when it ends.
+_open: Dict[str, Dict[str, Any]] = {}
+_last_req: Dict[str, str] = {}
 _chain_lock = threading.Lock()
 
 
@@ -252,8 +262,23 @@ def _host(base_url: str) -> str:
     return (urlparse(base_url or "").hostname or "").lower()
 
 
+def _flush(turn_id: str = "", every: bool = False) -> None:
+    with _lock:
+        ids = [k for k, e in _open.items() if every or e["_turn"] == turn_id]
+        entries = [_open.pop(k) for k in ids]
+    for e in entries:
+        e.pop("_turn", None)
+        e.pop("_session", None)
+        try:
+            append(e)
+        except Exception as err:
+            logger.warning("[trellis guard] hop log not written: %s", err)
+
+
 def _pre_api_request(api_request_id: str = "", turn_id: str = "", base_url: str = "",
                      model: str = "", request: Any = None, request_messages: Any = None, **_) -> None:
+    # The model is asked again: the previous answer's tools have all run.
+    _flush(turn_id)
     if not api_request_id:
         return
     host = _host(base_url)
@@ -276,30 +301,27 @@ def hosts(args: Any) -> set:
     return {h.lower().rstrip(".") for h in _HOST.findall(_text(args))} - _LOCAL
 
 
-def _calls(o: str, response: Any, session_id: str = "", provider_host: str = "") -> List[dict]:
-    msg = (response or {}).get("assistant_message") or {}
+def _record_call(o: str, name: str, args: Any, d: str, turn_id: str, session_id: str, api_request_id: str) -> None:
+    """One tool call onto the open entry of the model answer that asked for it.
+    The tool hooks carry the real name and arguments; the response payload a
+    hook is given does not (every name came back empty, #21 3388)."""
     with _lock:
-        seen = _seen.setdefault(session_id, {provider_host} if provider_host else set())
+        key = api_request_id if api_request_id in _open else _last_req.get(turn_id, "")
+        # No id to match (a caller that passes none): the answer opened last,
+        # since a model answer's tools run straight after it.
+        entry = _open.get(key) or (next(reversed(_open.values())) if _open else None)
+        sess = (entry or {}).get("_session") or session_id
+        seen = _seen.setdefault(sess, {(entry or {}).get("hop", {}).get("host", "")} - {""})
         while len(_seen) > _KEEP:
             _seen.pop(next(iter(_seen)))
-    out = []
-    for tc in msg.get("tool_calls") or []:
-        fn = (tc or {}).get("function") or {}
-        name = fn.get("name") or ""
-        raw = fn.get("arguments")
-        try:
-            args = json.loads(raw) if isinstance(raw, str) else (raw or {})
-        except ValueError:
-            args = raw
-        d = decision(o, name, args)
         reached = hosts(args)
         if d == "allow" and o != "operator" and reached - seen:
             d = "flag"
             logger.warning("[trellis guard] flagged %s: new host %s in a %s-origin turn",
                            name, ", ".join(sorted(reached - seen)), o)
         seen |= reached
-        out.append({"name": name, "args_sha256": _sha(args), "decision": d})
-    return out
+        if entry is not None:
+            entry["calls"].append({"name": name or "", "args_sha256": _sha(args if args is not None else {}), "decision": d})
 
 
 def _post_api_request(api_request_id: str = "", turn_id: str = "", response: Any = None,
@@ -307,19 +329,29 @@ def _post_api_request(api_request_id: str = "", turn_id: str = "", response: Any
     p = _pending.pop(api_request_id, None) if api_request_id else None
     if p is None:
         return
-    o, ask = origin(turn_id or p["turn_id"])
+    turn = turn_id or p["turn_id"]
+    o, ask = origin(turn)
     entry = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "hop": p["hop"],
         "turn": {"origin": o, "ask_sha256": ask},
         "req_sha256": p["req_sha256"],
         "resp_sha256": _sha(response),
-        "calls": _calls(o, response, session_id, p["hop"]["host"]),
+        "calls": [],
+        "_turn": turn,
+        "_session": session_id,
     }
-    try:
-        append(entry)
-    except Exception as e:
-        logger.warning("[trellis guard] hop log not written: %s", e)
+    with _lock:
+        _open[api_request_id] = entry
+        _last_req[turn] = api_request_id
+        while len(_last_req) > _KEEP:
+            _last_req.pop(next(iter(_last_req)))
+    if len(_open) > _KEEP:
+        _flush(every=True)
+
+
+def _end_turn(turn_id: str = "", **_) -> None:
+    _flush(turn_id)
 
 
 def _last(path: str) -> Optional[dict]:
@@ -397,3 +429,4 @@ def register(ctx) -> None:
     ctx.register_hook("transform_terminal_output", _transform)
     ctx.register_hook("pre_api_request", _pre_api_request)
     ctx.register_hook("post_api_request", _post_api_request)
+    ctx.register_hook("post_llm_call", _end_turn)
