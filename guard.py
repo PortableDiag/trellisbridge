@@ -146,11 +146,46 @@ def _text(args: Any) -> str:
 _READERS = re.compile(r"terminal|shell|exec|code|process|read|file|grep|patch|browser", re.IGNORECASE)
 
 
+# A quoted literal with whitespace in it is prose the call writes somewhere (a
+# card note that says "/opt/data/.env"), not a path it opens: Orbit's append to
+# #401 was held for that (2026-10-06). A path is a token with no spaces.
+_PROSE = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+
+
+def _without_prose(value: Any) -> Any:
+    if isinstance(value, str):
+        return _PROSE.sub(lambda m: m.group(0) if not re.search(r"\s", m.group(0)) else '""', value)
+    if isinstance(value, dict):
+        return {k: _without_prose(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_without_prose(v) for v in value]
+    return value
+
+
+_CODE = re.compile(r"terminal|shell|exec|code|process", re.IGNORECASE)
+_WRITES = re.compile(r"write|patch", re.IGNORECASE)
+_TARGET_KEY = re.compile(r"path|file|target|glob|dir|pattern|url", re.IGNORECASE)
+
+
+def _read_target(tool_name: str, args: Any) -> str:
+    """What a call reads, as text to match secret paths against (the
+    operator's ruling, #21 3514/3515: hold on what a call does, never on the
+    text it writes). Code and shell: the code or command minus its prose.
+    File and browser tools: their target fields, never content. Writes and
+    patches read nothing."""
+    if _WRITES.search(tool_name) and not _CODE.search(tool_name):
+        return ""
+    if _CODE.search(tool_name):
+        return _text(_without_prose(args))
+    a = args if isinstance(args, dict) else {}
+    return _text({k: v for k, v in a.items() if _TARGET_KEY.search(str(k))})
+
+
 def held(tool_name: str, args: Any) -> bool:
-    """Whether this call needs the operator's own words: a secret-bearing read,
-    or a delete or clear in Trellis."""
+    """Whether this call needs the operator's own words: a read of a secret
+    path, or a delete or clear in Trellis."""
     name = tool_name or ""
-    if "trellis" not in name and _READERS.search(name) and _SECRET_PATH.search(_text(args)):
+    if "trellis" not in name and _READERS.search(name) and _SECRET_PATH.search(_read_target(name, args)):
         return True
     if "trellis" in name:
         a = args if isinstance(args, dict) else {}
