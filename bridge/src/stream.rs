@@ -327,8 +327,36 @@ impl Bridge {
                 {
                     return After::Continue;
                 }
+                if self.assigned_recently(&doc, card, "property") {
+                    return After::Continue; // the same write's `task` event raised it
+                }
                 self.raise_streamed(&doc, card, env, "assigned", |from| {
                     format!("[assigned to you: card #{card} — {key}:: {val}, set by {from}]\n\nRead it with GET /api/cards/{card}.")
+                });
+            }
+            // One checklist line's task field (trellis-web 0.104.5, 2754 #437).
+            // The card's `property` event carries only the first line's value
+            // per key, so a later line assigned to this agent arrives only here.
+            "task" => {
+                let Some(card) = card else { return After::Continue };
+                let key = data["key"].as_str().unwrap_or("").to_ascii_lowercase();
+                let val = data["value"].as_str().unwrap_or("");
+                let item = data["item"].as_u64().unwrap_or(0);
+                if !ASSIGN_KEYS.contains(&key.as_str())
+                    || !val.to_ascii_lowercase().contains(&self.agent.to_ascii_lowercase())
+                    || !self.first_time(&format!("assigned:{doc}:{card}:{item}:{key}"), val)
+                    || self.assigned_recently(&doc, card, "task")
+                {
+                    return After::Continue;
+                }
+                // The card's own key too, so the change-log watcher catching up
+                // after a stream drop does not raise the card again.
+                self.first_time(&format!("assigned:{doc}:{card}:{key}"), val);
+                let task = data["text"].as_str().unwrap_or("").to_string();
+                self.raise_streamed(&doc, card, env, "assigned", |from| {
+                    format!(
+                        "[assigned to you: line {item} of checklist card #{card}, \"{task}\" — {key}:: {val}, set by {from}]\n\nRead it with GET /api/cards/{card}; POST /api/cards/{card}/complete {{\"item\": {item}}} marks it done."
+                    )
                 });
             }
             "signoff_requested" => {
@@ -395,6 +423,22 @@ impl Bridge {
     /// Raise a streamed request on the home channel. Who wrote it is judged by
     /// the same `speaker` rule as a change-log entry, from the attestation the
     /// event carries; without one it is unverified, never trusted.
+    /// True when the other event kind raised an assignment on this card in
+    /// the last minute; otherwise records this one. One write can raise both
+    /// `property` (the card's first value) and `task` (the line): the agent
+    /// hears it once. Two `task` events (two lines) are both raised.
+    fn assigned_recently(&self, doc: &str, card: u64, by: &str) -> bool {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let key = format!("assigned_at:{doc}:{card}");
+        let Ok(mut s) = self.store.lock() else { return false };
+        let last = s.meta(&key).cloned().unwrap_or(Value::Null);
+        if last["by"].as_str().is_some_and(|b| b != by) && last["at"].as_u64().is_some_and(|t| now.saturating_sub(t) < 60) {
+            return true;
+        }
+        let _ = s.set_meta(&key, json!({ "by": by, "at": now }));
+        false
+    }
+
     fn raise_streamed(&self, doc: &str, card: u64, env: &Value, kind: &str, text: impl FnOnce(&str) -> String) {
         let Some(home) = self.home_for(doc) else { return };
         // Catch the home channel up first. On the stream a message addressed to
@@ -468,6 +512,30 @@ mod tests {
         assert!(ev[0].trusted, "person + session + owner is the operator");
         assert_eq!(ev[0].card, 5, "raised on the home channel");
         assert!(ev[0].text.contains("assigned to you: card #7"));
+    }
+
+    #[test]
+    fn a_checklist_line_assigned_to_the_agent_is_raised_once_with_its_text() {
+        let b = crate::bridge::for_test(vec![5]);
+        let who = json!({"by": "operator", "kind": "person", "via": "session", "from_key_owner": true});
+        let task = |item: u64, text: &str, value: &str| {
+            let mut d = json!({"item": item, "text": text, "key": "assignee", "value": value, "old": null});
+            d.as_object_mut().unwrap().extend(who.as_object().unwrap().clone());
+            env("task", d)
+        };
+        // One write: the card's property (first line wins) and the line's task event.
+        let mut p = json!({"key": "assignee", "value": "Me"});
+        p.as_object_mut().unwrap().extend(who.as_object().unwrap().clone());
+        b.on_event(None, &task(1, "Walk dog", "Me"));
+        b.on_event(None, &env("property", p));
+        b.on_event(None, &task(1, "Walk dog", "Me"));
+        // Another line, another write: raised too. A line for someone else: not.
+        b.on_event(None, &task(2, "Feed cat", "Me"));
+        b.on_event(None, &task(3, "Mow", "Alice"));
+        let ev = b.events(0, Duration::from_millis(10));
+        assert_eq!(ev.len(), 2, "{:?}", ev.iter().map(|e| &e.text).collect::<Vec<_>>());
+        assert!(ev[0].trusted && ev[0].text.contains("line 1 of checklist card #7, \"Walk dog\""), "{}", ev[0].text);
+        assert!(ev[1].text.contains("\"Feed cat\""), "{}", ev[1].text);
     }
 
     #[test]
