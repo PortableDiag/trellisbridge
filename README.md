@@ -50,6 +50,10 @@ rewrite the response (arXiv 2604.08407). The plugin adds, with no change to Herm
   Trellis is held, and the agent is told why.
 - Secret values from `$HERMES_HOME/.env` are blanked out of every tool result as
   `[secret:NAME]`, so they never reach the model or any router.
+- Your Trellis account's bait key (Agents → Bait key; it opens nothing and alerts
+  you on any use) can ride along to the model provider, so a hop that harvests keys
+  trips it: `trellisbridge bait < FILE` on the bridge's host. It is blanked from
+  everything the agent shows.
 - A hash-chained log of each model call (host, router, turn origin, request and
   response digests, tool calls with their decision: allow, hold, or flag for a host
   the session had not reached, in a turn the operator did not start) in

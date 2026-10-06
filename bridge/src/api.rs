@@ -169,6 +169,11 @@ pub fn route(bridge: &Bridge, method: &str, path: &str, query: &str, body: &str,
             }
         }
         ("POST", ["api", "say"]) => say(bridge, body),
+        // The bait key, for the plugin only (D15). Null when none is set.
+        ("GET", ["api", "bait"]) => {
+            let bait = bridge.bait_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+            (200, json!({ "bait": bait }).to_string())
+        }
         // The plugin says which version it is on connecting, for health.
         ("POST", ["api", "plugin"]) => {
             let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
@@ -444,6 +449,19 @@ mod tests {
         let (status, body) = get(&for_test(vec![]), "/api/health", "", false);
         assert_eq!(status, 200);
         assert!(body.contains("\"version\""));
+    }
+
+    #[test]
+    fn the_bait_key_goes_only_to_a_caller_with_the_bridge_key() {
+        let mut b = for_test(vec![]);
+        assert_eq!(get(&b, "/api/bait", "", true), (200, r#"{"bait":null}"#.to_string()), "none set");
+        let file = std::env::temp_dir().join(format!("tb-bait-{}", std::process::id()));
+        std::fs::write(&file, "tk_bait_0123456789abcdef\n").unwrap();
+        b.bait_file = Some(file.clone());
+        assert_eq!(get(&b, "/api/bait", "", false).0, 401);
+        assert_eq!(get(&b, "/api/bait", "", true).1, r#"{"bait":"tk_bait_0123456789abcdef"}"#);
+        assert!(!get(&b, "/api/health", "", false).1.contains("tk_bait"), "never in health");
+        let _ = std::fs::remove_file(file);
     }
 
     #[test]

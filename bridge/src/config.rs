@@ -26,6 +26,13 @@ pub struct Config {
     /// agent hands to senders. Empty: the loopback address.
     #[serde(default)]
     pub hooks_url: String,
+    /// The account's bait key (trellis-web 0.107.0, #401 C1): a mode-600 file
+    /// the bridge hands only to its plugin, which carries it to the model
+    /// provider as a line never to be used (D15). On a host where the bridge
+    /// runs as its own user, no tool of the agent can read the file. Written
+    /// by `trellisbridge bait`. Unset: `bait.key` beside this config, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bait_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +142,7 @@ impl Default for Config {
             trellis: Trellis::default(),
             hooks_port: None,
             hooks_url: String::new(),
+            bait_file: None,
         }
     }
 }
@@ -199,14 +207,14 @@ impl Config {
 }
 
 #[cfg(unix)]
-fn set_private(path: &Path) -> Result<(), String> {
+pub(crate) fn set_private(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[cfg(not(unix))]
-fn set_private(_path: &Path) -> Result<(), String> {
+pub(crate) fn set_private(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 

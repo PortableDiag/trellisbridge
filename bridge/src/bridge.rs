@@ -70,6 +70,8 @@ pub struct Bridge {
     /// (trellis-web 0.59.0), trusted as the operator only on a message the
     /// server marks `agent_verified`. None in production. See `provenance`.
     pub e2e_operator: Option<String>,
+    /// The bait key's file (D15); read on each `GET /api/bait`.
+    pub bait_file: Option<std::path::PathBuf>,
     /// The default document: where a request that names none goes.
     pub document: String,
     /// Documents followed. Fixed from the config, or refreshed from
@@ -1051,6 +1053,7 @@ pub fn for_test(channels: Vec<u64>) -> Bridge {
         agent: "Me".into(),
         operators: vec!["operator".into(), "alice".into()],
         e2e_operator: None,
+        bait_file: None,
         document: "D".into(),
         documents: Mutex::new(vec!["D".into()]),
         discover: false,

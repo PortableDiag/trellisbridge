@@ -46,6 +46,7 @@ fn run() -> Result<(), String> {
         }
         Some("init") => init(args.collect()),
         Some("card") => card(args.collect()),
+        Some("bait") => bait(args.collect()),
         Some("call") => {
             let cfg = config::Config::load_or_create(None)?;
             let mut method = args.next().ok_or("call METHOD PATH [JSON]")?;
@@ -114,6 +115,9 @@ fn run() -> Result<(), String> {
             println!("  trellisbridge [--config PATH] COMMAND   (or TRELLISBRIDGE_CONFIG; one config per agent)\n");
             println!("  trellisbridge init --key-file PATH [--agent NAME] [--port N] [--url URL] [--force]");
             println!("                           write the config for an agent key: its name and document from GET /api/whoami");
+            println!("  trellisbridge bait [--clear] < KEYFILE");
+            println!("                           save the account's bait key (read from stdin) for the plugin to carry");
+            println!("                           to the model provider as a line never to be used (router canary)");
             println!("  trellisbridge card [--avatar PATH | --no-avatar] [--description TEXT]");
             println!("                           save the agent card's settings, then publish it (avatar shown in channels);");
             println!("                           only what you pass changes, and the card's skills stay. At startup the");
@@ -329,6 +333,9 @@ fn serve(cfg: &config::Config) -> Result<(), String> {
         agent: t.agent.clone(),
         operators,
         e2e_operator: (!t.e2e_operator.is_empty()).then(|| t.e2e_operator.clone()),
+        // `trellisbridge bait` writes bait.key beside the config; read on each
+        // request, so saving one needs no restart.
+        bait_file: cfg.bait_file.clone().or_else(|| config::config_path().ok().map(|p| p.with_file_name("bait.key"))),
         documents: std::sync::Mutex::new(if discover { vec![document.clone()] } else { t.documents.clone() }),
         document,
         discover,
@@ -464,6 +471,38 @@ fn publish_card(client: &trellis::Client, t: &config::Trellis, base: Option<&ser
     let v = client.post("/api/agents/card", &body)?;
     let icon = v["icon_url"].as_str().or_else(|| v["card"]["icon_url"].as_str()).unwrap_or("none");
     Ok(format!("published as {} — {note}; icon {icon}", t.agent))
+}
+
+/// `trellisbridge bait`: save the account's bait key (#401 C1, D15) from
+/// stdin, so it is never in a command line or shell history, into a mode-600
+/// file beside the config. `--clear` removes it. The plugin picks it up for
+/// each new session.
+fn bait(args: Vec<String>) -> Result<(), String> {
+    let path = config::config_path()?;
+    let mut cfg = config::Config::load_or_create(Some(&path))?;
+    let file = path.with_file_name("bait.key");
+    if args.iter().any(|a| a == "--clear") {
+        let _ = std::fs::remove_file(&file);
+        cfg.bait_file = None;
+        cfg.save(&path)?;
+        println!("bait      cleared");
+        return Ok(());
+    }
+    if let Some(a) = args.first() {
+        return Err(format!("bait: unknown option {a:?} — paste the key on stdin, or --clear"));
+    }
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).map_err(|e| format!("reading stdin: {e}"))?;
+    let key = line.trim();
+    if key.len() < 16 || key.chars().any(char::is_whitespace) {
+        return Err("bait: expected one key on stdin (the account's Bait key, from Agents → Bait key)".into());
+    }
+    std::fs::write(&file, key).map_err(|e| format!("{}: {e}", file.display()))?;
+    config::set_private(&file)?;
+    cfg.bait_file = Some(file.clone());
+    cfg.save(&path)?;
+    println!("bait      saved to {} ({} characters); the plugin carries it from the agent's next session, no restart needed", file.display(), key.len());
+    Ok(())
 }
 
 /// `trellisbridge card`: change the card's settings in the config, then

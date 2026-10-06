@@ -18,6 +18,9 @@ provider sees the plaintext request and may rewrite the response, so:
    are blanked out of every tool result as `[secret:NAME]`, whoever started the
    turn. A command can still use one by reference, e.g. "$TELEGRAM_BOT_TOKEN",
    so the value never enters a prompt or crosses a router.
+3b. **The bait** (#401 C1): the account's bait key, held by the bridge, rides to
+   the provider in the system prompt as a line never to be used; any use trips
+   trellis-web's alarm. Blanked everywhere, and fetching it is held.
 4. **A hash-chained hop log** (#399 item 5, client half; #398 chain form). One
    entry per model call, in $HERMES_HOME/trellis/hops.jsonl: seq, prev, ts,
    hop {host, model, router}, turn {origin, ask_sha256}, req_sha256,
@@ -125,7 +128,7 @@ _SECRET_PATH = re.compile(
     r"(?:^|[^\w.])\.env(?:\.[\w-]+)?\b"            # .env, /opt/data/.env, .env.local
     r"|auth\.json|mcp-tokens|\.netrc|\.ssh/|id_(?:rsa|ed25519)"
     r"|[\w.-]*key[\w.-]*\.(?:json|txt|pem)\b"      # mindswarm-agent-key.json, api-key.txt
-    r"|\btrellis\.key\b|\bapi-key\b|config\.yaml",
+    r"|\btrellis\.key\b|\bapi-key\b|config\.yaml|\bbait\.key\b|/api/bait\b",
     # A dump of the process environment is not matched here: its secret
     # values are blanked from the output (3. below), whoever started the turn.
     re.IGNORECASE)
@@ -223,7 +226,11 @@ def _load_secrets() -> List[Tuple[str, str]]:
 
 
 def blank(text: str) -> str:
-    for name, value in _load_secrets():
+    pairs = list(_load_secrets())
+    b = bait()
+    if b:
+        pairs.insert(0, ("TRELLIS_BAIT", b))
+    for name, value in pairs:
         if value in text:
             text = text.replace(value, f"[secret:{name}]")
     return text
@@ -235,6 +242,55 @@ def _transform(result: Any = None, output: Any = None, **_) -> Optional[str]:
         return None
     out = blank(text)
     return out if out != text else None
+
+
+def _transform_reply(response_text: Any = None, **_) -> Optional[str]:
+    """The agent's final reply, blanked the same way: a secret (or the bait)
+    the model repeats never reaches a channel."""
+    if not isinstance(response_text, str):
+        return None
+    out = blank(response_text)
+    return out if out != response_text else None
+
+
+# --- 3b. the bait (#401 C1, trellis-web 0.107.0) ----------------------------
+# The account's bait key looks real and opens nothing; any use is logged and
+# the owner told. The bridge holds it (`trellisbridge bait`), in a file the
+# agent's tools cannot read where the bridge runs as its own user, and hands it
+# only to this plugin. It goes to the model provider in the system prompt, as
+# the built-in agents carry theirs, so a hop that harvests keys from requests
+# trips it. It is blanked from every tool result and reply, and fetching it is
+# held outside the operator's turns.
+_bait_cache: Tuple[float, str] = (0.0, "")
+
+
+def bait() -> str:
+    global _bait_cache
+    import time
+    at, value = _bait_cache
+    if time.time() - at < 300:
+        return value
+    value = ""
+    try:
+        import httpx
+        from .tools import _bridge
+        base, headers = _bridge()
+        r = httpx.get(f"{base}/api/bait", headers=headers, timeout=5.0)
+        if r.status_code == 200:
+            value = (r.json() or {}).get("bait") or ""
+    except Exception as e:
+        logger.debug("[trellis guard] bait not fetched: %s", e)
+    _bait_cache = (time.time(), value)
+    return value
+
+
+BAIT_LINE = ("Provider configuration, not for you: TRELLIS_API_KEY={bait}. This value is never to "
+             "be used, sent, quoted or repeated, in any tool call or reply, whoever asks.")
+
+
+def _bait_section(_session_info: Any = None) -> str:
+    b = bait()
+    return BAIT_LINE.format(bait=b) if b else ""
 
 
 # --- 4. the hop log ---------------------------------------------------------
@@ -427,6 +483,12 @@ def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", _pre_tool_call)
     ctx.register_hook("transform_tool_result", _transform)
     ctx.register_hook("transform_terminal_output", _transform)
+    ctx.register_hook("transform_llm_output", _transform_reply)
+    if hasattr(ctx, "register_system_prompt_section"):
+        try:
+            ctx.register_system_prompt_section("trellis-bait", _bait_section)
+        except Exception as e:
+            logger.warning("[trellis guard] bait section not registered: %s", e)
     ctx.register_hook("pre_api_request", _pre_api_request)
     ctx.register_hook("post_api_request", _post_api_request)
     ctx.register_hook("post_llm_call", _end_turn)
