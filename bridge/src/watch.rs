@@ -362,6 +362,7 @@ impl Bridge {
             lead_only: false,
             broadcast: false,
             expect: None,
+            origin: c["origin"].as_str().map(str::to_string),
         };
         let mut e = e;
         e.peer = !e.trusted && matches!(provenance, "agent" | "person" | "builtin");

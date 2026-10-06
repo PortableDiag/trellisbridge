@@ -995,6 +995,7 @@ pub fn events_from(ch: &Value, c: &Chan, cursor: u64, agent: &str, operators: &[
                 lead_only: naming == Naming::Nobody,
                 broadcast: naming == Naming::Group,
                 expect: m.get("expect").filter(|e| e.is_object()).cloned(),
+                origin: m["origin"].as_str().map(str::to_string),
             })
         })
         .collect()
@@ -1104,6 +1105,17 @@ mod tests {
             {"seq": 3, "from": "Me", "kind": "agent", "at": "t3", "text": "mine"},
             {"seq": 4, "from": "OtherAgent", "kind": "agent", "at": "t4", "text": "hi"}
         ]})
+    }
+
+    #[test]
+    fn the_servers_origin_verdict_reaches_the_plugin() {
+        let mut ch = channel();
+        ch["messages"][2]["origin"] = json!("agent");
+        let ev = events_from(&ch, &d(9), 2, "Me", &ops(), None, true);
+        assert_eq!(ev[0].origin.as_deref(), Some("agent"));
+        assert_eq!(serde_json::to_value(&ev[0]).unwrap()["origin"], "agent");
+        let ev = events_from(&channel(), &d(9), 2, "Me", &ops(), None, true);
+        assert!(serde_json::to_value(&ev[0]).unwrap().get("origin").is_none(), "absent when the server sends none (desktop)");
     }
 
     #[test]

@@ -21,7 +21,10 @@ provider sees the plaintext request and may rewrite the response, so:
 4. **A hash-chained hop log** (#399 item 5, client half; #398 chain form). One
    entry per model call, in $HERMES_HOME/trellis/hops.jsonl: seq, prev, ts,
    hop {host, model, router}, turn {origin, ask_sha256}, req_sha256,
-   resp_sha256, calls [{name, args_sha256, decision}], hash. One chain per
+   resp_sha256, calls [{name, args_sha256, decision}], hash. `decision` is
+   allow, hold (the gate), or flag: a host this session had not reached yet,
+   in a turn the operator did not start (#399 item 4; records, never blocks).
+   One chain per
    agent. The digests are over the canonical JSON a Hermes hook is given (keys
    already redacted), not the wire bytes, which a plugin never sees.
 """
@@ -71,9 +74,14 @@ def _remember(table: Dict, key: str, value) -> None:
 
 # --- 1. origin -------------------------------------------------------------
 
-def note_event(event_id: str, provenance: Optional[str], text: str) -> None:
-    """The bridge's verdict on a Trellis message, kept for the turn it starts."""
-    origin = {"operator": "operator", "builtin": "agent", "agent": "agent"}.get(provenance or "", "content")
+def note_event(event_id: str, provenance: Optional[str], text: str, server_origin: Optional[str] = None) -> None:
+    """The origin of a Trellis message, kept for the turn it starts: the
+    server's own verdict when it sends one (trellis-web 0.106.1, the classifier
+    its gate uses), else the bridge's D11 provenance."""
+    if server_origin in ("operator", "agent", "content"):
+        origin = server_origin
+    else:
+        origin = {"operator": "operator", "builtin": "agent", "agent": "agent"}.get(provenance or "", "content")
     _remember(_events, str(event_id), (origin, _sha((text or "").encode())))
 
 
@@ -256,8 +264,24 @@ def _pre_api_request(api_request_id: str = "", turn_id: str = "", base_url: str 
     })
 
 
-def _calls(o: str, response: Any) -> List[dict]:
+# Hosts each session has already reached (#399 item 4, Nexus's spec on #21 3332):
+# a tool call to a host not seen earlier in the session, in a turn the operator
+# did not start, is recorded as `flag`. Never blocks; the gate is the enforcer.
+_seen: Dict[str, set] = {}
+_HOST = re.compile(r"\b(?:https?|wss?|ftp)://([A-Za-z0-9.-]+)", re.IGNORECASE)
+_LOCAL = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
+def hosts(args: Any) -> set:
+    return {h.lower().rstrip(".") for h in _HOST.findall(_text(args))} - _LOCAL
+
+
+def _calls(o: str, response: Any, session_id: str = "", provider_host: str = "") -> List[dict]:
     msg = (response or {}).get("assistant_message") or {}
+    with _lock:
+        seen = _seen.setdefault(session_id, {provider_host} if provider_host else set())
+        while len(_seen) > _KEEP:
+            _seen.pop(next(iter(_seen)))
     out = []
     for tc in msg.get("tool_calls") or []:
         fn = (tc or {}).get("function") or {}
@@ -267,11 +291,19 @@ def _calls(o: str, response: Any) -> List[dict]:
             args = json.loads(raw) if isinstance(raw, str) else (raw or {})
         except ValueError:
             args = raw
-        out.append({"name": name, "args_sha256": _sha(args), "decision": decision(o, name, args)})
+        d = decision(o, name, args)
+        reached = hosts(args)
+        if d == "allow" and o != "operator" and reached - seen:
+            d = "flag"
+            logger.warning("[trellis guard] flagged %s: new host %s in a %s-origin turn",
+                           name, ", ".join(sorted(reached - seen)), o)
+        seen |= reached
+        out.append({"name": name, "args_sha256": _sha(args), "decision": d})
     return out
 
 
-def _post_api_request(api_request_id: str = "", turn_id: str = "", response: Any = None, **_) -> None:
+def _post_api_request(api_request_id: str = "", turn_id: str = "", response: Any = None,
+                      session_id: str = "", **_) -> None:
     p = _pending.pop(api_request_id, None) if api_request_id else None
     if p is None:
         return
@@ -282,7 +314,7 @@ def _post_api_request(api_request_id: str = "", turn_id: str = "", response: Any
         "turn": {"origin": o, "ask_sha256": ask},
         "req_sha256": p["req_sha256"],
         "resp_sha256": _sha(response),
-        "calls": _calls(o, response),
+        "calls": _calls(o, response, session_id, p["hop"]["host"]),
     }
     try:
         append(entry)

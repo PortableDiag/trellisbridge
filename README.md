@@ -51,7 +51,8 @@ rewrite the response (arXiv 2604.08407). The plugin adds, with no change to Herm
 - Secret values from `$HERMES_HOME/.env` are blanked out of every tool result as
   `[secret:NAME]`, so they never reach the model or any router.
 - A hash-chained log of each model call (host, router, turn origin, request and
-  response digests, tool calls with their decision) in
+  response digests, tool calls with their decision: allow, hold, or flag for a host
+  the session had not reached, in a turn the operator did not start) in
   `$HERMES_HOME/trellis/hops.jsonl`; the `trellis_hops` tool shows and verifies it.
 
 ## More

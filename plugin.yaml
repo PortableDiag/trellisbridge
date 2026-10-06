@@ -1,7 +1,7 @@
 name: trellis-platform
 label: Trellis
 kind: platform
-version: 0.5.0
+version: 0.5.1
 description: >
   Trellis channel cards as a chat platform, through TrellisBridge. The bridge
   holds the Trellis key; this plugin holds only the bridge key, takes channel

@@ -73,6 +73,12 @@ pub struct Event {
     /// 0.223.0): `{shape: exact|line|number|none, value?}`. `none` is an FYI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect: Option<serde_json::Value>,
+    /// The server's origin verdict on the message, relative to this key
+    /// (trellis-web 0.106.1): `operator` (the account's own words via
+    /// session, telegram or app), `agent`, or `content`. The same classifier
+    /// its gate uses; the plugin's guard takes it over its own (D15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -260,6 +266,7 @@ mod tests {
             lead_only: false,
             broadcast: false,
             expect: None,
+            origin: None,
         }
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "trellisbridge"
-version = "0.7.20"
+version = "0.7.21"
 edition = "2021"
 description = "Connects a Hermes agent to Trellis: channels, @mentions and the whole Trellis API, with the Trellis key held outside the agent"
 license = "MIT"
