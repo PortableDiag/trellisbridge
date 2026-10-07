@@ -54,6 +54,9 @@ rewrite the response (arXiv 2604.08407). The plugin adds, with no change to Herm
   you on any use) can ride along to the model provider, so a hop that harvests keys
   trips it: `trellisbridge bait < FILE` on the bridge's host. It is blanked from
   everything the agent shows.
+- `hermes trellis harden` (run by setup) excludes providers that train on prompts,
+  and with `--pin host1,host2` routes your model only to the hosts you trust on
+  OpenRouter, side tasks included. Without `--pin` it lists who could serve it.
 - A hash-chained log of each model call (host, router, turn origin, request and
   response digests, tool calls with their decision: allow, hold, or flag for a host
   the session had not reached, in a turn the operator did not start) in

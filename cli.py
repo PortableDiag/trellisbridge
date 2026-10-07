@@ -40,18 +40,30 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
     p.add_argument("--avatar", help="the agent's picture in Trellis channels")
     p.add_argument("--description", help="one line on the agent's card")
     p.add_argument("--no-restart", action="store_true", help="do not restart the Hermes gateway")
+    p.add_argument("--pin", default="", help="router threat: route the main model only to these OpenRouter hosts, in order (host1,host2)")
+    p.add_argument("--bait-file", default="", help="router threat: the account's bait key (Trellis Agents -> Bait key) in a file")
+    p.add_argument("--no-harden", action="store_true", help="skip the router-threat settings (hermes trellis harden)")
+    h = subs.add_parser("harden", help="Router-threat settings: no-training rule, pinned hosts, bait key (idempotent)")
+    h.add_argument("--pin", default="", help="route the main model only to these OpenRouter hosts, in order (host1,host2)")
+    h.add_argument("--bait-file", default="", help="the account's bait key (Trellis Agents -> Bait key) in a file")
+    h.add_argument("--dry-run", action="store_true", help="say what would change, save nothing")
     subs.add_parser("status", help="Is the bridge up, and which Trellis is it on?")
     parser.set_defaults(func=dispatch)
 
 
 def dispatch(args: argparse.Namespace) -> int:
     sub = getattr(args, "trellis_command", None) or "status"
-    return {"setup": _setup, "status": _status}.get(sub, _unknown)(args)
+    return {"setup": _setup, "status": _status, "harden": _harden}.get(sub, _unknown)(args)
 
 
 def _unknown(args) -> int:
-    print("usage: hermes trellis {setup,status}", file=sys.stderr)
+    print("usage: hermes trellis {setup,harden,status}", file=sys.stderr)
     return 2
+
+
+def _harden(args: argparse.Namespace) -> int:
+    from .harden import harden
+    return harden(pin=args.pin, bait_file=args.bait_file, dry_run=args.dry_run)
 
 
 def _version() -> str:
@@ -125,7 +137,20 @@ def _setup(args: argparse.Namespace) -> int:
             cmd += [f"--{flag.replace('_', '-')}", value]
     if args.no_restart:
         cmd.append("--no-restart")
-    return subprocess.run(cmd).returncode
+    # The router-threat settings go in before the installer restarts the
+    # gateway, so the restart applies them; the bait goes to the bridge after
+    # the installer has put the bridge in place.
+    if not args.no_harden:
+        from .harden import harden
+        try:
+            harden(pin=args.pin)
+        except Exception as e:  # noqa: BLE001 — never block the install on it
+            print(f"  harden    skipped: {e}. Run later: hermes trellis harden")
+    rc = subprocess.run(cmd).returncode
+    if rc == 0 and args.bait_file and not args.no_harden:
+        from .harden import _bait
+        _bait(args.bait_file)
+    return rc
 
 
 def _status(args) -> int:
