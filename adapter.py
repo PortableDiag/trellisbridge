@@ -57,7 +57,7 @@ _TERMINATOR = re.compile(r"(?m)^[ \t]*---[ \t]*$")
 
 # Files that arrive from Trellis land here, one folder per card, inside the
 # Hermes data volume so the agent's file tools can open them.
-# Inside the agent's write root (HERMES_WRITE_SAFE_ROOT, deploy/hermes), so the
+# Inside the agent's write root (HERMES_WRITE_SAFE_ROOT, set in Orbit's compose file), so the
 # file tools can open what arrives and nothing outside the workspace is writable.
 FILES_DIR = os.path.join(os.environ.get("HERMES_WRITE_SAFE_ROOT") or os.path.join(os.environ.get("HERMES_HOME", "/opt/data"), "workspace"), "trellis-files")
 
@@ -83,7 +83,11 @@ def _split_chat(chat_id: str):
 
 
 try:
-    from gateway.run_turn import _UNEXPECTED_SILENCE_REPLY as _W
+    try:  # Hermes v0.21.7+: localized, read through a function
+        from gateway.run_turn import _unexpected_silence_reply
+        _W = _unexpected_silence_reply()
+    except ImportError:  # up to v0.21.6
+        from gateway.run_turn import _UNEXPECTED_SILENCE_REPLY as _W
     _SILENCE_WARNING_PREFIX = _W.strip()[:40]
 except Exception:  # an internal name, so a fallback if it moves
     _SILENCE_WARNING_PREFIX = "⚠️ The model returned only a silence marker"

@@ -538,6 +538,18 @@ mod tests {
         assert!(ev[1].text.contains("\"Feed cat\""), "{}", ev[1].text);
     }
 
+    // Since trellis-web 0.111.2 (2754 #463) an agent's line write raises `task`
+    // for other streams: a peer's assignment, never the operator's order.
+    #[test]
+    fn a_line_assigned_by_a_peer_agent_is_raised_as_a_peer() {
+        let b = crate::bridge::for_test(vec![5]);
+        b.on_event(None, &env("task", json!({"item": 2, "text": "Mow", "key": "assignee", "value": "Me", "old": null, "by": "Alice", "kind": "agent", "via": "api", "agent_verified": true, "from_key_owner": true})));
+        let ev = b.events(0, Duration::from_millis(10));
+        assert_eq!(ev.len(), 1);
+        assert!(!ev[0].trusted && ev[0].peer, "an agent is a peer even on the owner's account");
+        assert!(ev[0].text.contains("set by Alice"), "{}", ev[0].text);
+    }
+
     #[test]
     fn every_type_handled_is_subscribed() {
         let asked: Vec<&str> = PATH.split("types=").nth(1).unwrap().split(',').collect();

@@ -26,9 +26,15 @@ const PROTOCOL: &str = "2025-06-18";
 const MAX_RESULT: usize = 1_000_000;
 
 /// Routes the agent is never sent to: minting or revoking keys, signing in,
-/// and the account's own AI provider key. Everything else is the key's scope,
-/// enforced by Trellis itself.
-const REFUSED: &[&str] = &["/api/keys", "/api/auth/", "/api/provider-key"];
+/// the account's own AI provider key, and signing up a new agent account (web
+/// 0.119.0: its answer is an account-wide key). Everything else is the key's
+/// scope, enforced by Trellis itself.
+const REFUSED: &[&str] = &["/api/keys", "/api/auth/", "/api/provider-key", "/api/agent/challenge", "/api/agent/register"];
+
+/// Writes refused on one exact route: minting an invite code (web 0.119.0), which
+/// shares the operator's document with whoever holds it. Reading, stopping and
+/// redeeming one stay open.
+const REFUSED_WRITES: &[(&str, &str)] = &[("POST", "/api/agent/invites")];
 
 pub fn handle(bridge: &Bridge, body: &[u8]) -> (u16, String) {
     let req: Value = match serde_json::from_slice(body) {
@@ -157,13 +163,16 @@ pub fn refuse(method: &str, path: &str) -> Option<String> {
         return Some(format!("method {method:?} is not one of GET POST PATCH PUT DELETE"));
     }
     let bare = path.split('?').next().unwrap_or(path);
+    if let Some((_, r)) = REFUSED_WRITES.iter().find(|(m, r)| *m == method && bare.trim_end_matches('/') == *r) {
+        return Some(format!("{method} {r} is not reachable through the bridge: sharing the operator's documents is the operator's"));
+    }
     REFUSED
         .iter()
         .find(|r| {
             let r = r.trim_end_matches('/');
             bare == r || bare.starts_with(&format!("{r}/"))
         })
-        .map(|r| format!("{r} is not reachable through the bridge: keys, sign-in and the provider key are the operator's"))
+        .map(|r| format!("{r} is not reachable through the bridge: keys, sign-in, agent sign-up and the provider key are the operator's"))
 }
 
 /// The reference is public and markdown; it is fetched without the key.
@@ -252,6 +261,17 @@ mod tests {
         assert!(refuse("GET", "/etc/passwd").is_some());
         assert!(refuse("GET", "/api/agent").is_none());
         assert!(refuse("GET", "/api/keystone").is_none(), "prefix match is on the path segment");
+    }
+
+    #[test]
+    fn agent_signup_and_minting_an_invite_are_refused() {
+        assert!(refuse("POST", "/api/agent/challenge").is_some());
+        assert!(refuse("POST", "/api/agent/register").is_some());
+        assert!(refuse("POST", "/api/agent/invites").is_some());
+        assert!(refuse("POST", "/api/agent/invites/?document=x").is_some());
+        assert!(refuse("GET", "/api/agent/invites").is_none());
+        assert!(refuse("DELETE", "/api/agent/invites/tai_ab").is_none());
+        assert!(refuse("POST", "/api/agent/invites/tai_ab/redeem").is_none());
     }
 
     #[test]
