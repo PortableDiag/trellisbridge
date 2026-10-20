@@ -71,6 +71,8 @@ pub fn handle(bridge: &Bridge, body: &[u8]) -> (u16, String) {
     }
 }
 
+/// `readOnlyHint` lets Hermes replay a read after a bridge restart drops its
+/// MCP session; a call without it is treated as a write and not replayed.
 fn tools() -> Value {
     json!([
         {
@@ -92,7 +94,8 @@ fn tools() -> Value {
                 },
                 "required": ["method", "path"],
                 "additionalProperties": false
-            }
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }
         },
         {
             "name": "trellis_webhooks",
@@ -105,7 +108,8 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": { "id": { "type": "string" } },
                 "additionalProperties": false
-            }
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false }
         },
         {
             "name": "trellis_reference",
@@ -116,7 +120,8 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": { "section": { "type": "string" } },
                 "additionalProperties": false
-            }
+            },
+            "annotations": { "readOnlyHint": true, "idempotentHint": true }
         }
     ])
 }
@@ -244,6 +249,15 @@ mod tests {
         assert!(r.contains("\"protocolVersion\":\"2025-03-26\""), "{r}");
         let (_, r) = handle(&b, br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         assert!(r.contains("trellis_api") && r.contains("trellis_reference"), "{r}");
+    }
+
+    #[test]
+    fn only_the_reads_are_marked_read_only() {
+        let t = tools();
+        let hint = |n: &str| t.as_array().unwrap().iter().find(|x| x["name"] == n).unwrap()["annotations"]["readOnlyHint"].clone();
+        assert_eq!(hint("trellis_api"), json!(false));
+        assert_eq!(hint("trellis_webhooks"), json!(true));
+        assert_eq!(hint("trellis_reference"), json!(true));
     }
 
     #[test]
