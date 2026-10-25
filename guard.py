@@ -39,6 +39,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -107,6 +108,15 @@ def origin(turn_id: str = "") -> Tuple[str, str]:
         return _events.get(_session("HERMES_SESSION_MESSAGE_ID"), ("content", ""))
     if _session("HERMES_CRON_SESSION") == "1":
         return ("operator", "")  # a job the operator scheduled
+    if platform == "textx":
+        # TextXBridge's plugin decides it per event (its DESIGN X11) and publishes
+        # the table: the paired phone's user typing to the agent is the operator;
+        # a watched thread, an auto-reply or a call is someone else's words.
+        textx = sys.modules.get("textx_turn_origins")
+        events = getattr(textx, "events", None) or {}
+        if events.get(_session("HERMES_SESSION_MESSAGE_ID")) == "operator":
+            return ("operator", "")
+        return ("content", "")
     if platform in ("", "cli", "local", "telegram"):
         # No platform bound: the local CLI or TUI, the operator at the keyboard.
         # Telegram: Hermes's own allowlist admits only the operator's chat.
