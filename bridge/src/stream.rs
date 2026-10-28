@@ -168,6 +168,15 @@ impl Bridge {
         self.set_mode(MODE_STREAM);
     }
 
+    /// The keep-alive (every 15 s) says Trellis answers. On a quiet stream it is
+    /// the only thing that does, so one failed read (Nexus, a DNS blip on
+    /// 2026-10-27) would otherwise stay on /api/health as unreachable.
+    fn heard(&self, line: &str) {
+        if line.starts_with(':') {
+            self.set_ok();
+        }
+    }
+
     fn fall_back(&self) {
         if self.mode() == MODE_STREAM {
             // Read every owned channel again under the pollers' rules.
@@ -214,6 +223,7 @@ impl Bridge {
                 Ok(_) => {}
                 Err(e) => return Ended::Dropped(e.to_string()),
             }
+            self.heard(&line);
             if let Some(f) = parser.line(&line) {
                 *delivered = true;
                 self.stream_ok();
@@ -636,6 +646,16 @@ mod tests {
         assert!(b.refresh.load(Ordering::SeqCst));
         assert_eq!(b.on_event(None, &env("replaced", json!({}))), After::End(Ended::Replaced));
         assert!(matches!(b.on_event(None, &env("auth", json!({"reason": "revoked"}))), After::End(Ended::Auth(_))));
+    }
+
+    #[test]
+    fn a_keep_alive_clears_an_old_trellis_error() {
+        let b = crate::bridge::for_test(vec![5]);
+        b.set_err("Dns Failed: resolve dns name");
+        b.heard("data: {}\n");
+        assert!(!b.status().trellis_ok);
+        b.heard(": keep-alive\n");
+        assert!(b.status().trellis_ok && b.status().last_error.is_none());
     }
 
     #[test]
