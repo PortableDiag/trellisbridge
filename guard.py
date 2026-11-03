@@ -124,8 +124,17 @@ def origin(turn_id: str = "") -> Tuple[str, str]:
     return ("content", "")
 
 
+# A plugin's injected turn (Hermes ctx.inject_message) runs in the owner's last
+# chat and borrows that chat's origin, so on Telegram it would read as the
+# operator. Dry's awareness injects other people's edits to a shared space that
+# way. Its header marks it: such a turn is content, whatever the platform.
+_INJECTED = ("[Dry: ",)
+
+
 def _start_turn(turn_id: str = "", user_message: Any = None, **_) -> None:
     o, ask = origin()
+    if isinstance(user_message, str) and user_message.lstrip().startswith(_INJECTED):
+        o = "content"
     if not ask and isinstance(user_message, str):
         ask = _sha(user_message.encode())
     if turn_id:
