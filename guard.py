@@ -121,6 +121,10 @@ def origin(turn_id: str = "") -> Tuple[str, str]:
         # No platform bound: the local CLI or TUI, the operator at the keyboard.
         # Telegram: Hermes's own allowlist admits only the operator's chat.
         return ("operator", "")
+    if platform == "api_server" and os.environ.get("TRELLIS_API_SERVER_IS_OPERATOR") == "1":
+        # Off unless this host says so. Set only where a login-gated front end (AvatarX) alone
+        # holds API_SERVER_KEY, so every API turn is the logged-in owner. See DESIGN D11.
+        return ("operator", "")
     return ("content", "")
 
 
