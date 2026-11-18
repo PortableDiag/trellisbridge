@@ -204,7 +204,10 @@ def send(args: dict, **kw) -> str:
     else:
         target = "telegram"
     text = message + "".join(f"\nMEDIA:{p}" for p in files)
-    from tools.send_message_tool import send_message_tool
+    try:  # Hermes v0.23.2 moved it to gateway.outbound
+        from gateway.outbound.send import send_message_tool
+    except ImportError:
+        from tools.send_message_tool import send_message_tool
     return send_message_tool({"action": "send", "target": target, "message": text})
 
 
